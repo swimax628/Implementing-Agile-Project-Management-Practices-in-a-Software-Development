@@ -1,0 +1,2659 @@
+# config.py
+
+import os
+from dotenv import load_dotenv
+import logging
+
+# Load environment variables from .env file
+load_dotenv(dotenv_path=".env")
+
+# OpenAI API Configuration
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+OPENAI_API_URL = "https://api.openai.com/v1/chat/completions"
+
+# Database Configuration
+TAWOS_DB_URI = os.getenv("TAWOS_DB_URI")
+
+# Validate Configuration
+if not OPENAI_API_KEY:
+    raise RuntimeError("OpenAI API key is missing. Please set the OPENAI_API_KEY environment variable.")
+
+if not TAWOS_DB_URI:
+    raise RuntimeError("TAWOS database URI is missing. Please set the TAWOS_DB_URI environment variable.")
+
+# Logging Configuration
+LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
+logging.basicConfig(level=LOG_LEVEL, format='%(asctime)s %(levelname)s:%(message)s')
+
+
+# database.py
+
+import os
+import pandas as pd
+import glob
+import logging
+from sqlalchemy import create_engine, text
+from sqlalchemy.exc import SQLAlchemyError
+from config import TAWOS_DB_URI
+from methodology import infer_methodology  # Import from methodology.py
+
+# Configure logging
+logger = logging.getLogger(__name__)
+
+# Load PROMISE Dataset
+def load_promise_dataset():
+    # Path to PROMISE dataset CSV files
+    promise_files = glob.glob(os.path.join('data/promise', '*.csv'))
+    promise_dataframes = []
+    all_columns = set()
+
+    # Load and concatenate all CSV files
+    for file in promise_files:
+        try:
+            logger.info(f"Loading {file}")
+            df = pd.read_csv(file)
+            # Collect all columns
+            all_columns.update(df.columns)
+            promise_dataframes.append(df)
+        except Exception as e:
+            logger.error(f"Error loading {file}: {e}")
+            continue
+
+    if not promise_dataframes:
+        logger.error("No PROMISE dataset files were loaded successfully.")
+        raise RuntimeError("Failed to load PROMISE dataset.")
+
+    # Ensure all dataframes have the same columns
+    for df in promise_dataframes:
+        missing_columns = all_columns - set(df.columns)
+        for col in missing_columns:
+            df[col] = pd.NA  # Use pandas NA for missing values
+
+    # Concatenate all dataframes
+    combined_df = pd.concat(promise_dataframes, ignore_index=True)
+
+    # Ensure necessary columns are present
+    required_columns = {'bug', 'loc', 'amc', 'wmc', 'cbo', 'rfc', 'cam'}
+    missing_required_columns = required_columns - set(combined_df.columns)
+    if missing_required_columns:
+        logger.error(f"Missing required columns in PROMISE dataset: {missing_required_columns}")
+        raise RuntimeError(f"Missing required columns in PROMISE dataset: {missing_required_columns}")
+
+    # Compute 'defect_density' as bug count divided by lines of code
+    combined_df['defect_density'] = combined_df.apply(
+        lambda row: row['bug'] / row['loc'] if pd.notna(row['bug']) and pd.notna(row['loc']) and row['loc'] > 0 else pd.NA, axis=1
+    )
+
+    # Use 'amc' (Average Method Complexity) as 'complexity'
+    combined_df['complexity'] = combined_df['amc']
+
+    # Remove rows with missing 'complexity' values
+    combined_df = combined_df.dropna(subset=['complexity'])
+
+    # Categorize 'complexity' into 'complexity_level'
+    bins = [0, 5, 10, float('inf')]
+    labels = ['Low', 'Medium', 'High']
+    combined_df['complexity_level'] = pd.cut(combined_df['complexity'], bins=bins, labels=labels, right=False)
+
+    # Assign methodologies based on thresholds if not already assigned
+    complexity_threshold = 15  # WMC threshold
+    size_threshold = 1000      # LOC threshold
+    combined_df['assigned_methodology'] = combined_df.apply(
+        lambda row: 'Waterfall' if (row['wmc'] > complexity_threshold or row['loc'] > size_threshold) else 'Agile',
+        axis=1
+    )
+
+    return combined_df
+
+# Load PROMISE dataset
+try:
+    promise_df = load_promise_dataset()
+except Exception as e:
+    logger.error(f"Error loading PROMISE dataset: {e}")
+    promise_df = pd.DataFrame()  # Set to empty DataFrame if loading fails
+
+# Create database engine for TAWOS dataset
+engine = None
+try:
+    engine = create_engine(TAWOS_DB_URI)
+    # Test the connection
+    with engine.connect() as conn:
+        conn.execute(text("SELECT 1"))
+except SQLAlchemyError as e:
+    logger.error(f"Error creating database engine: {e}")
+    engine = None  # Set engine to None if connection fails
+
+# Function to query PROMISE dataset
+def query_promise_dataset(metrics):
+    methodology = metrics.get('methodology')
+    complexity_level = metrics.get('complexity_level')
+
+    if not methodology or not complexity_level:
+        logger.warning("Methodology or complexity level is missing in parsed metrics.")
+        return {'average_defect_density': None, 'average_complexity': None}
+
+    methodology = methodology.lower()
+    complexity_level = complexity_level.capitalize()  # Since labels are 'Low', 'Medium', 'High'
+
+    # Filter dataframe with case-insensitive matching
+    filtered_df = promise_df[
+        (promise_df['assigned_methodology'].str.lower() == methodology) &
+        (promise_df['complexity_level'] == complexity_level)
+    ]
+
+    if filtered_df.empty:
+        logger.warning("No matching records found in PROMISE dataset.")
+        return {'average_defect_density': None, 'average_complexity': None}
+
+    average_defect_density = filtered_df['defect_density'].mean()
+    average_complexity = filtered_df['complexity'].mean()
+
+    return {
+        'average_defect_density': average_defect_density,
+        'average_complexity': average_complexity
+    }
+
+
+def query_tawos_dataset(project_data):
+    """
+    Queries TAWOS dataset and includes methodology inference.
+    
+    Parameters:
+        project_data (dict): Dictionary containing project-related fields.
+    
+    Returns:
+        dict: Result data with metrics calculated based on inferred methodology.
+    """
+    methodology = project_data.get('methodology')
+    if not methodology:
+        methodology = infer_methodology(project_data)  # Infer methodology if not provided
+
+    query = text("""
+        SELECT
+            AVG(TIMESTAMPDIFF(MINUTE, Issue.Creation_Date, Issue.Resolution_Date)) AS avg_resolution_time
+        FROM Project
+        JOIN Issue ON Project.ID = Issue.Project_ID
+        WHERE LOWER(:methodology) = LOWER(:methodology_param)
+    """)
+
+    try:
+        with engine.connect() as conn:
+            result = conn.execute(query, {"methodology_param": methodology}).fetchone()
+            return {"average_resolution_time": result["avg_resolution_time"]}
+    except SQLAlchemyError as e:
+        logger.error(f"Database error in query_tawos_dataset: {e}")
+        return {}
+
+# main.py
+
+"""
+Main application entry point. Sets up the FastAPI app and includes routers.
+"""
+
+from fastapi import FastAPI
+from fastapi.staticfiles import StaticFiles
+from routers import (
+    risk_analysis,
+    methodology_recommendation,
+    estimation_benchmarking,
+    other_routes
+)
+import logging
+
+# Initialize FastAPI app
+app = FastAPI(
+    title="Project Management Application",
+    description="An application for analyzing project data and providing recommendations.",
+    version="1.0.0",
+)
+app.mount("/static", StaticFiles(directory="static"), name="static")
+
+# Include routers
+app.include_router(risk_analysis.router)
+app.include_router(methodology_recommendation.router)
+app.include_router(estimation_benchmarking.router)
+app.include_router(other_routes.router)
+
+# Configure logging
+logger = logging.getLogger(__name__)
+# methodology.py
+
+def infer_methodology(project_data):
+    """
+    Infers the methodology based on project attributes.
+    
+    Parameters:
+        project_data (dict): Dictionary containing project-related fields like `sprints`, `total_duration`, etc.
+    
+    Returns:
+        str: Inferred methodology ('Agile' or 'Waterfall')
+    """
+    if 'sprint_count' in project_data and project_data['sprint_count'] > 1:
+        return 'Agile'
+    elif 'project_duration' in project_data and project_data['project_duration'] > 6:  # duration in months
+        return 'Waterfall'
+    else:
+        # Default to Agile if no strong indication
+        return 'Agile'
+# models.py
+
+from typing import Optional
+from pydantic import BaseModel
+
+class ProjectData(BaseModel):
+    description: str
+    test_description: Optional[str] = None
+    # Add other fields if necessary
+# # test_db_connection.py
+
+# from sqlalchemy import create_engine, text  # Import 'text'
+# from config import TAWOS_DB_URI
+
+# engine = create_engine(TAWOS_DB_URI)
+
+# try:
+#     with engine.connect() as connection:
+#         result = connection.execute(text("SELECT 1"))  # Wrap query with 'text()'
+#         print("Database connection successful.")
+# except Exception as e:
+#     print(f"Database connection failed: {e}")
+# test_openai_api.py
+
+import os
+import openai
+from dotenv import load_dotenv
+
+# Load environment variables from .env file
+load_dotenv(dotenv_path=".env")  # Adjust the path if your .env file is named differently or located elsewhere
+
+# Get the OpenAI API key from environment variables
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+
+if not OPENAI_API_KEY:
+    raise RuntimeError("OpenAI API key is missing. Please set the OPENAI_API_KEY environment variable.")
+
+# Set the OpenAI API key
+openai.api_key = OPENAI_API_KEY
+
+def test_openai_api():
+    try:
+        # Make a simple API call to get a completion
+        response = openai.Completion.create(
+            engine="text-davinci-003",  # You can change the engine if needed
+            prompt="Hello, world!",
+            max_tokens=5
+        )
+        print("API call successful. Response:")
+        print(response.choices[0].text.strip())
+    except openai.error.OpenAIError as e:
+        print(f"An error occurred: {e}")
+
+if __name__ == "__main__":
+    test_openai_api()
+# utils.py
+
+import re
+import requests
+import logging
+from typing import Optional, Tuple
+from config import OPENAI_API_KEY, OPENAI_API_URL
+from database import promise_df, query_promise_dataset, query_tawos_dataset
+from tenacity import retry, stop_after_attempt, wait_fixed
+import numpy as np
+from scipy import stats
+# Setup logging
+logger = logging.getLogger(__name__)
+logging.basicConfig(level=logging.INFO)
+
+# Helper function to parse the project description
+def parse_project_description(description: str):
+    # Initialize metrics with default values
+    estimated_loc = None
+    complexity_level = None
+    methodology = None
+    wmc = None
+    cbo = None
+
+    # Regular expressions to extract metrics
+    estimated_loc_match = re.search(r'Estimated LOC(?: is|=)?\s*(\d+)', description, re.IGNORECASE)
+    if estimated_loc_match:
+        estimated_loc = int(estimated_loc_match.group(1))
+    else:
+        logger.warning("Estimated LOC is missing in the project description.")
+
+    complexity_level_match = re.search(r'(?:with a )?(low|medium|high) complexity level', description, re.IGNORECASE)
+    if complexity_level_match:
+        complexity_level = complexity_level_match.group(1).capitalize()
+    else:
+        logger.warning("Complexity level is missing in the project description.")
+
+    methodology_match = re.search(r'(Agile|Waterfall) methodology', description, re.IGNORECASE)
+    if methodology_match:
+        methodology = methodology_match.group(1)
+    else:
+        logger.warning("Methodology is missing in the project description.")
+
+    wmc_match = re.search(r'WMC(?: is|=)?\s*(\d+)', description, re.IGNORECASE)
+    if wmc_match:
+        wmc = int(wmc_match.group(1))
+    else:
+        logger.warning("WMC is missing in the project description.")
+
+    cbo_match = re.search(r'CBO(?: is|=)?\s*(\d+)', description, re.IGNORECASE)
+    if cbo_match:
+        cbo = int(cbo_match.group(1))
+    else:
+        logger.warning("CBO is missing in the project description.")
+
+    # Assign methodology based on thresholds if not specified
+    if methodology is None and wmc is not None and estimated_loc is not None:
+        complexity_threshold = 15  # WMC threshold
+        size_threshold = 1000      # LOC threshold
+        if wmc > complexity_threshold or estimated_loc > size_threshold:
+            methodology = 'Waterfall'
+        else:
+            methodology = 'Agile'
+        logger.info(f"Assigned methodology based on thresholds: {methodology}")
+
+    # Default values if metrics are missing
+    metrics = {
+        'estimated_loc': estimated_loc if estimated_loc is not None else 15000,
+        'complexity_level': complexity_level if complexity_level is not None else "High",
+        'methodology': methodology if methodology is not None else "Agile",
+        'wmc': wmc if wmc is not None else 25,
+        'cbo': cbo if cbo is not None else 15
+    }
+
+    # Log metrics with defaults applied
+    for key, value in metrics.items():
+        if value == 15000 and key == 'estimated_loc':
+            logger.info("Default Estimated LOC used (15000).")
+        elif value == "High" and key == 'complexity_level':
+            logger.info("Default Complexity Level used (High).")
+        elif value == "Agile" and key == 'methodology':
+            logger.info("Default Methodology used (Agile).")
+        elif value == 25 and key == 'wmc':
+            logger.info("Default WMC used (25).")
+        elif value == 15 and key == 'cbo':
+            logger.info("Default CBO used (15).")
+
+    return metrics
+
+# Helper function to call OpenAI API
+@retry(stop=stop_after_attempt(3), wait=wait_fixed(2))
+def call_openai_api(prompt: str, system_prompt: Optional[str] = None):
+    headers = {
+        "Authorization": f"Bearer {OPENAI_API_KEY}",
+        "Content-Type": "application/json",
+    }
+    messages = []
+    if system_prompt:
+        messages.append({"role": "system", "content": system_prompt})
+    messages.append({"role": "user", "content": prompt})
+
+    data = {
+        "model": "gpt-3.5-turbo",
+        "messages": messages,
+        "max_tokens": 1000,
+        "temperature": 0,
+    }
+    try:
+        response = requests.post(OPENAI_API_URL, headers=headers, json=data)
+        response.raise_for_status()
+        logger.debug(f"Response Status Code: {response.status_code}")
+        logger.debug(f"Response Text: {response.text}")
+        result = response.json()
+        if 'choices' not in result or not result['choices']:
+            logger.error("No choices returned from OpenAI API.")
+            raise Exception("Invalid response from OpenAI API.")
+        return result['choices'][0]['message']['content'].strip()
+    except requests.exceptions.RequestException as e:
+        logger.error(f"Error calling OpenAI API: {e}")
+        raise Exception("Error calling OpenAI API") from e
+
+# Function to extract numeric value from text
+def extract_number(text: str):
+    match = re.search(r'[-+]?\d*\.\d+|\d+', text)
+    if match:
+        try:
+            return float(match.group())
+        except ValueError:
+            return None
+    return None
+
+# Function to parse OpenAI response for numerical values
+def parse_response(response: str, agile_label: str = "Agile:", waterfall_label: str = "Waterfall:") -> Tuple[list, list]:
+    lines = response.strip().split('\n')
+    agile_values, waterfall_values = [], []
+    current_section = None
+
+    for line in lines:
+        line = line.strip()
+        if not line:
+            continue  # Skip empty lines
+
+        if line.startswith(agile_label):
+            current_section = "Agile"
+            continue
+        elif line.startswith(waterfall_label):
+            current_section = "Waterfall"
+            continue
+
+        if current_section == "Agile":
+            value = extract_number(line)
+            if value is not None:
+                agile_values.append(value)
+            else:
+                logger.warning(f"No numeric value found in line '{line}' for Agile.")
+        elif current_section == "Waterfall":
+            value = extract_number(line)
+            if value is not None:
+                waterfall_values.append(value)
+            else:
+                logger.warning(f"No numeric value found in line '{line}' for Waterfall.")
+
+    return agile_values, waterfall_values
+
+# Function to estimate defect rate
+def estimate_defect_rate(metrics, historical_data):
+    """
+    Estimate defect rate based on metrics and historical data.
+    Parameters:
+        metrics (dict): Dictionary containing project metrics like 'estimated_loc'.
+        historical_data (dict): Dictionary containing historical data like 'average_defect_density'.
+    Returns:
+        float: Estimated defect rate, or None if required data is missing.
+    """
+    try:
+        avg_defect_density = historical_data.get('average_defect_density')
+        estimated_loc = metrics.get('estimated_loc')
+
+        if avg_defect_density is None or estimated_loc is None:
+            logger.warning("Required data for defect rate calculation is missing.")
+            return None
+
+        return (avg_defect_density * estimated_loc) / 1000
+    except Exception as e:
+        logger.error(f"Error calculating defect rate: {e}")
+        return None
+
+# Function to calculate risk score
+def calculate_risk_score(metrics, historical_data):
+    """
+    Calculate the risk score based on metrics and weighted historical data.
+    Parameters:
+        metrics (dict): Dictionary containing project metrics.
+        historical_data (dict): Dictionary containing historical data.
+    Returns:
+        float: Calculated risk score.
+    """
+    try:
+        risk_score = 0
+        weights = {
+            'average_defect_density': 0.4,
+            'average_resolution_time': 0.3,
+            'average_complexity': 0.3
+        }
+
+        for key, weight in weights.items():
+            value = historical_data.get(key)
+            risk_score += value * weight if value is not None else 0
+            if value is None:
+                logger.warning(f"Missing historical data for {key}")
+
+        return risk_score
+    except Exception as e:
+        logger.error(f"Error calculating risk score: {e}")
+        return None
+
+# Function to suggest methodology
+def suggest_methodology(metrics):
+    """
+    Suggest a methodology (Agile or Waterfall) based on defect density comparisons.
+    Parameters:
+        metrics (dict): Dictionary containing project metrics.
+    Returns:
+        tuple: Recommended methodology, Agile data, and Waterfall data.
+    """
+    try:
+        metrics_agile = {**metrics, 'methodology': 'Agile'}
+        agile_data = {**query_promise_dataset(metrics_agile), **query_tawos_dataset(metrics_agile)}
+
+        metrics_waterfall = {**metrics, 'methodology': 'Waterfall'}
+        waterfall_data = {**query_promise_dataset(metrics_waterfall), **query_tawos_dataset(metrics_waterfall)}
+
+        agile_defect_density = agile_data.get('average_defect_density', float('inf'))
+        waterfall_defect_density = waterfall_data.get('average_defect_density', float('inf'))
+
+        recommended_methodology = 'Agile' if agile_defect_density < waterfall_defect_density else 'Waterfall'
+        return recommended_methodology, agile_data, waterfall_data
+    except Exception as e:
+        logger.error(f"Error suggesting methodology: {e}")
+        return None, {}, {}
+
+# Function to calculate estimation accuracy
+def calculate_estimation_accuracy(metrics):
+    """
+    Calculate the accuracy of LOC estimation against historical data.
+    Parameters:
+        metrics (dict): Dictionary containing project metrics like 'complexity_level' and 'estimated_loc'.
+    Returns:
+        float: Estimation accuracy percentage, or None if required data is missing.
+    """
+    try:
+        complexity_level = metrics.get('complexity_level', '').capitalize()
+        estimated_loc = metrics.get('estimated_loc')
+
+        if not complexity_level or estimated_loc is None:
+            logger.warning("Complexity level or Estimated LOC is missing.")
+            return None
+
+        filtered_df = promise_df[promise_df['complexity_level'] == complexity_level]
+        if filtered_df.empty:
+            logger.warning("No matching records in PROMISE dataset for estimation accuracy.")
+            return None
+
+        average_actual_loc = filtered_df['loc'].mean()
+        return (1 - abs(estimated_loc - average_actual_loc) / average_actual_loc) * 100 if average_actual_loc else None
+    except Exception as e:
+        logger.error(f"Error calculating estimation accuracy: {e}")
+        return None
+
+# Function to assess complexity manageability
+def assess_complexity_manageability(metrics):
+    """
+    Assess whether project complexity metrics (WMC, CBO) are manageable.
+    Parameters:
+        metrics (dict): Dictionary containing project metrics like 'wmc' and 'cbo'.
+    Returns:
+        bool: True if complexity is manageable, False otherwise.
+    """
+    try:
+        wmc = metrics.get('wmc')
+        cbo = metrics.get('cbo')
+
+        if wmc is None or cbo is None:
+            logger.warning("WMC or CBO values are missing in project description.")
+            return False
+
+        wmc_threshold = 50
+        cbo_threshold = 10
+
+        return wmc <= wmc_threshold and cbo <= cbo_threshold
+    except Exception as e:
+        logger.error(f"Error assessing complexity manageability: {e}")
+        return False
+
+# Additional Statistical Analysis Functions
+def calculate_correlations():
+    """
+    Calculate the correlation matrix for numeric data in the PROMISE dataset.
+    Returns:
+        DataFrame: Correlation matrix for numeric columns.
+    """
+    try:
+        numeric_data = promise_df.select_dtypes(include=['number']).dropna()
+        if numeric_data.empty:
+            logger.error("No numeric data available for correlation matrix.")
+            return None
+        return numeric_data.corr()
+    except Exception as e:
+        logger.error(f"Error calculating correlation matrix: {e}")
+        return None
+
+
+def perform_t_test(data1, data2):
+    """
+    Perform an independent t-test on two datasets, with type conversion and error handling.
+    Parameters:
+        data1 (list or array-like): First dataset.
+        data2 (list or array-like): Second dataset.
+    Returns:
+        dict: Dictionary containing t-statistic and p-value.
+    """
+    try:
+        data1 = np.array(data1, dtype=float)
+        data2 = np.array(data2, dtype=float)
+
+        t_stat, p_val = stats.ttest_ind(data1, data2, equal_var=False)
+        logger.info(f"T-test performed successfully: t-statistic={t_stat}, p-value={p_val}")
+        return {"t_statistic": t_stat, "p_value": p_val}
+    except Exception as e:
+        logger.error(f"Error performing t-test: {str(e)}")
+        return {"error": str(e)}
+
+# routers/estimation_benchmarking.py
+
+from fastapi import APIRouter, HTTPException
+from models import ProjectData
+from utils import parse_project_description, calculate_estimation_accuracy, assess_complexity_manageability
+import logging
+
+router = APIRouter()
+logger = logging.getLogger(__name__)
+
+@router.post("/benchmark_estimation/")
+async def benchmark_estimation(project: ProjectData):
+    try:
+        parsed_metrics = parse_project_description(project.description)
+        estimation_accuracy = calculate_estimation_accuracy(parsed_metrics)
+        complexity_manageable = assess_complexity_manageability(parsed_metrics)
+
+        response = {
+            "estimation_accuracy": estimation_accuracy,
+            "complexity_manageable": complexity_manageable
+        }
+
+        # Handle cases where data is missing
+        messages = []
+        if estimation_accuracy is None:
+            messages.append("Estimation accuracy could not be calculated due to missing data.")
+        if complexity_manageable is None:
+            messages.append("Complexity manageability could not be assessed due to missing WMC or CBO values.")
+        if messages:
+            response["message"] = " ".join(messages)
+
+        return response
+    except Exception as e:
+        logger.error(f"Error in /benchmark_estimation/: {e}")
+        raise HTTPException(status_code=500, detail="An error occurred while benchmarking estimation.")
+# routers/methodology_recommendation.py
+
+from fastapi import APIRouter, HTTPException
+from models import ProjectData
+from utils import parse_project_description, call_openai_api, suggest_methodology
+import logging
+
+router = APIRouter()
+logger = logging.getLogger(__name__)
+
+@router.post("/recommend_methodology/")
+async def recommend_methodology(project: ProjectData):
+    try:
+        parsed_metrics = parse_project_description(project.description)
+        recommendation, agile_data, waterfall_data = suggest_methodology(parsed_metrics)
+
+        prompt = f"""
+Based on the following project metrics and historical data:
+
+Project Metrics:
+Estimated LOC: {parsed_metrics.get('estimated_loc', 'N/A')}
+Complexity Level: {parsed_metrics.get('complexity_level', 'N/A')}
+
+Agile Metrics:
+Average Defect Density: {agile_data.get('average_defect_density', 'N/A')}
+Average Resolution Time: {agile_data.get('average_resolution_time', 'N/A')}
+
+Waterfall Metrics:
+Average Defect Density: {waterfall_data.get('average_defect_density', 'N/A')}
+Average Resolution Time: {waterfall_data.get('average_resolution_time', 'N/A')}
+
+Recommend the optimal methodology (Agile or Waterfall) for this project and justify your recommendation.
+"""
+        recommendation_content = call_openai_api(prompt)
+        return {
+            "recommended_methodology": recommendation,
+            "recommendation_details": recommendation_content
+        }
+    except Exception as e:
+        logger.error(f"Error in /recommend_methodology/: {e}")
+        raise HTTPException(status_code=500, detail="An error occurred while recommending methodology.")
+# routers/other_routes.py
+
+from typing import Optional
+from fastapi import APIRouter, Request, HTTPException, Query
+from fastapi.responses import HTMLResponse
+from fastapi.templating import Jinja2Templates
+from models import ProjectData
+from utils import (
+    parse_project_description,
+    call_openai_api,
+    estimate_defect_rate,
+    calculate_risk_score,
+    suggest_methodology,
+    calculate_estimation_accuracy,
+    assess_complexity_manageability,
+    perform_t_test,
+    calculate_correlations,
+    parse_response  
+)
+from database import query_promise_dataset, query_tawos_dataset, promise_df, engine
+import logging
+import pandas as pd
+import plotly.express as px
+from sqlalchemy import text
+from sqlalchemy.exc import SQLAlchemyError
+import httpx
+router = APIRouter()
+templates = Jinja2Templates(directory="templates")
+
+# Setup logging
+logger = logging.getLogger(__name__)
+
+# Index Route
+@router.get("/", response_class=HTMLResponse)
+async def index(request: Request):
+    """
+    Renders the index page.
+    """
+    return templates.TemplateResponse("index.html", {"request": request})
+
+# Clean Description Route
+@router.post("/clean_description/")
+async def clean_description(project: ProjectData):
+    """
+    Cleans and preprocesses the project description using the OpenAI API.
+    """
+    try:
+        prompt = f"Clean and preprocess the following project description for analysis:\n\n{project.description}\n\nCleaned Description:"
+        cleaned_description = call_openai_api(prompt)
+        return {"cleaned_description": cleaned_description}
+    except Exception as e:
+        logger.error(f"Error in /clean_description/: {e}")
+        raise HTTPException(status_code=500, detail="An error occurred while cleaning the description.")
+
+# Statistical Analysis Routes
+
+@router.get("/analysis/promise/correlations", response_class=HTMLResponse)
+async def promise_correlations(request: Request):
+    """
+    Displays the correlation matrix heatmap for the PROMISE dataset.
+    """
+    try:
+        corr_matrix = calculate_correlations()
+        fig = px.imshow(corr_matrix, text_auto=True, title="PROMISE Dataset Correlation Matrix")
+        chart_html = fig.to_html(full_html=False)
+        description = "This heatmap shows the correlations between different numerical metrics in the PROMISE dataset."
+        return templates.TemplateResponse("correlations.html", {
+            "request": request,
+            "chart": chart_html,
+            "description": description
+        })
+    except Exception as e:
+        logger.error(f"Error generating correlation matrix: {e}")
+        raise HTTPException(status_code=500, detail="An error occurred while generating the correlation matrix.")
+
+@router.get("/analysis/promise/t_tests", response_class=HTMLResponse)
+async def promise_t_tests(request: Request):
+    """
+    Performs t-tests on the PROMISE dataset and displays the results.
+    """
+    try:
+        t_test_results = perform_t_test()
+        return templates.TemplateResponse("t_tests.html", {
+            "request": request,
+            "t_test_results": t_test_results
+        })
+    except Exception as e:
+        logger.error(f"Error performing t-tests: {e}")
+        raise HTTPException(status_code=500, detail="An error occurred while performing t-tests.")
+
+@router.get("/analysis/tawos/resolution_time", response_class=HTMLResponse)
+async def tawos_resolution_time_comparison(request: Request):
+    """
+    Displays a bar chart comparing average resolution times between Agile and Waterfall methodologies in the TAWOS dataset.
+    """
+    try:
+        # Pass relevant data to infer methodology
+        project_data = {
+            "sprint_count": 2,  # You can dynamically assign this based on the project data
+            "project_duration": 12  # Project duration in months
+        }
+        
+        tawos_data = query_tawos_dataset(project_data)
+        avg_resolution_time = tawos_data.get("average_resolution_time", None)
+
+        if avg_resolution_time is None:
+            raise HTTPException(status_code=500, detail="Unable to calculate resolution time.")
+
+        # Render results (assuming you have an HTML template to display this)
+        return templates.TemplateResponse("tawos_resolution_time.html", {
+            "request": request,
+            "avg_resolution_time": avg_resolution_time
+        })
+    except Exception as e:
+        logger.error(f"Error generating resolution time comparison: {e}")
+        raise HTTPException(status_code=500, detail="An error occurred while generating the resolution time comparison.")
+
+# Generate Productivity Route
+@router.post("/generate_productivity/")
+async def generate_productivity(project: ProjectData):
+    """
+    Generates productivity values for Agile and Waterfall methodologies using the OpenAI API.
+    """
+    prompt = f"""
+    Read the following project description and determine 5 float productivity values for Agile and 5 float productivity values for Waterfall at 5 different time points during the development duration of the given project.
+
+    Important: You must **only** output the numerical values without any numbering, bullet points, explanations, or additional text. Do not include any introductory or concluding remarks.
+
+    Format the response exactly as follows:
+
+    Agile:
+    value1
+    value2
+    value3
+    value4
+    value5
+
+    Waterfall:
+    value1
+    value2
+    value3
+    value4
+    value5
+    """
+    system_prompt = "You are an assistant that strictly outputs numerical values as instructed, without any additional text."
+    try:
+        # Log the prompt sent to the API
+        logger.info("Sending prompt to OpenAI API")
+
+        content = call_openai_api(prompt, system_prompt=system_prompt)
+        
+        # Log the raw API response
+        logger.info(f"API response content: {content}")
+
+        agile_productivity, waterfall_productivity = parse_response(content)
+
+        # Check and log the final values before returning
+        if not (agile_productivity and waterfall_productivity):
+            logger.error("Parsed values are empty or None")
+            raise ValueError("Parsed values are empty or None")
+        
+        logger.info("Returning productivity data")
+        return {
+            "agile_productivity": agile_productivity,
+            "waterfall_productivity": waterfall_productivity
+        }
+
+    except Exception as e:
+        logger.error(f"Error in /generate_productivity/: {e}")
+        raise HTTPException(status_code=500, detail="An error occurred while generating productivity values.")
+
+
+# Test Prototype
+@router.get("/test_prototype", response_class=HTMLResponse)
+async def test_prototype_page(request: Request, description: Optional[str] = Query(None)):
+    """
+    Renders the test prototype page.
+    """
+    description = description or ""
+    return templates.TemplateResponse("test_prototype.html", {
+        "request": request,
+        "cleaned_description": description
+    })
+
+
+@router.post("/test_prototype/")
+async def test_prototype(project: ProjectData):
+    """
+    Performs a test on the prototype based on the provided test description.
+    """
+    try:
+        description = project.description
+        test_description = project.test_description
+        if not test_description:
+            raise HTTPException(status_code=400, detail="Test description is required.")
+        prompt = f"Based on the project description:\n\n{description}\n\nPerform a test with the following input:\n\n{test_description}\n\nTest Results:"
+        test_results = call_openai_api(prompt)
+        return {"test_results": test_results}
+    except HTTPException as he:
+        raise he  # Re-raise HTTP exceptions
+    except Exception as e:
+        logger.error(f"Error in /test_prototype/: {e}")
+        raise HTTPException(status_code=500, detail="An error occurred during prototype testing.")
+
+# Risk Mitigation Route
+@router.get("/risk_mitigation", response_class=HTMLResponse)
+async def risk_mitigation_page(request: Request, description: Optional[str] = Query(None)):
+    """
+    Renders the risk mitigation page.
+    """
+    description = description or ""
+    return templates.TemplateResponse("risk_mitigation.html", {
+        "request": request,
+        "cleaned_description": description,
+        "mitigation_strategies": ""
+    })
+
+@router.post("/generate_risk_mitigation/")
+async def generate_risk_mitigation(project: ProjectData):
+    """
+    Generates risk mitigation strategies using the OpenAI API.
+    """
+    try:
+        prompt = f"Based on the following project description, provide risk mitigation strategies:\n\n{project.description}\n\nRisk Mitigation Strategies:"
+        mitigation_strategies = call_openai_api(prompt)
+        return {"mitigation_strategies": mitigation_strategies}
+    except Exception as e:
+        logger.error(f"Error in /generate_risk_mitigation/: {e}")
+        raise HTTPException(status_code=500, detail="An error occurred while generating risk mitigation strategies.")
+
+# Project Stages Routes
+
+stage_info = {
+    "design": {
+        "name": "Design",
+        "template": "design.html"
+    },
+    "prototyping": {
+        "name": "Prototyping",
+        "template": "prototyping.html"
+    },
+    "customer_evaluation": {
+        "name": "Customer Evaluation",
+        "template": "customer_evaluation.html"
+    },
+    "review_and_update": {
+        "name": "Review & Update",
+        "template": "review_and_update.html"
+    },
+    "development": {
+        "name": "Development",
+        "template": "development.html"
+    },
+    "testing": {
+        "name": "Testing",
+        "template": "testing.html"
+    },
+    "maintenance": {
+        "name": "Maintenance",
+        "template": "maintenance.html"
+    }
+}
+
+def create_stage_routes(stage_key, stage_details):
+    @router.get(f"/{stage_key}", response_class=HTMLResponse)
+    async def stage_page(request: Request, description: Optional[str] = Query(None)):
+        """
+        Renders the page for the specified project stage.
+        """
+        description = description or ""
+        return templates.TemplateResponse(stage_details["template"], {
+            "request": request,
+            "stage": stage_details["name"],
+            "content": "",
+            "cleaned_description": description
+        })
+
+    @router.post(f"/generate_{stage_key}/")
+    async def generate_stage_content(project: ProjectData):
+        """
+        Generates content for the specified project stage using the OpenAI API.
+        """
+        try:
+            prompt = f"Generate a detailed plan for the {stage_details['name'].lower()} stage of an Agile project for the following project description and compare it with the same phase in the Waterfall model, if any.\n\n{project.description}\n\n{stage_details['name']} Plan:"
+            content = call_openai_api(prompt)
+            return {f"{stage_key}_content": content}
+        except Exception as e:
+            logger.error(f"Error in /generate_{stage_key}/: {e}")
+            raise HTTPException(status_code=500, detail=f"An error occurred while generating the {stage_details['name'].lower()} plan.")
+
+    # Add routes to the router
+    router.add_api_route(f"/{stage_key}", stage_page, methods=["GET"], response_class=HTMLResponse)
+    router.add_api_route(f"/generate_{stage_key}/", generate_stage_content, methods=["POST"])
+
+# Create routes for each project stage
+for stage_key, stage_details in stage_info.items():
+    create_stage_routes(stage_key, stage_details)
+
+# Identified Risks Route
+@router.get("/identified_risks", response_class=HTMLResponse)
+async def identified_risks_page(request: Request, description: Optional[str] = Query(None)):
+    """
+    Renders the identified risks page.
+    """
+    description = description or ""
+    return templates.TemplateResponse("identified_risks.html", {
+        "request": request,
+        "cleaned_description": description,
+        "assessment": ""
+    })
+
+# Risk Assessment Route
+@router.get("/risk_assessment", response_class=HTMLResponse)
+async def risk_assessment_page(request: Request, description: Optional[str] = Query(None)):
+    """
+    Renders the risk assessment page.
+    """
+    description = description or ""
+    return templates.TemplateResponse("risk_assessment.html", {
+        "request": request,
+        "cleaned_description": description,
+        "assessment": ""
+    })
+
+@router.post("/generate_risk_assessment/")
+async def generate_risk_assessment(project: ProjectData):
+    """
+    Generates a risk assessment report using the OpenAI API.
+    """
+    try:
+        parsed_metrics = parse_project_description(project.description)
+        promise_data = query_promise_dataset(parsed_metrics)
+        tawos_data = query_tawos_dataset(parsed_metrics)
+        defect_rate = estimate_defect_rate(parsed_metrics, promise_data)
+        risk_score = calculate_risk_score(parsed_metrics, {**promise_data, **tawos_data})
+
+        prompt = f"""
+Based on the project description and the following metrics:
+Estimated LOC: {parsed_metrics.get('estimated_loc', 'N/A')}
+Complexity Level: {parsed_metrics.get('complexity_level', 'N/A')}
+Methodology: {parsed_metrics.get('methodology', 'N/A')}
+Historical Average Defect Density: {promise_data.get('average_defect_density', 'N/A')}
+Estimated Defect Rate: {defect_rate if defect_rate is not None else 'N/A'}
+Risk Score: {risk_score if risk_score is not None else 'N/A'}
+
+Provide a detailed risk assessment report that highlights potential challenges and recommendations.
+"""
+        assessment = call_openai_api(prompt)
+        return {"assessment": assessment}
+    except Exception as e:
+        logger.error(f"Error in /generate_risk_assessment/: {e}")
+        raise HTTPException(status_code=500, detail="An error occurred while generating risk assessment.")
+
+# Methodology Recommendation Route
+@router.post("/recommend_methodology/")
+async def recommend_methodology(project: ProjectData):
+    """
+    Recommends the optimal methodology (Agile or Waterfall) based on project metrics and historical data.
+    """
+    try:
+        parsed_metrics = parse_project_description(project.description)
+        recommendation, agile_data, waterfall_data = suggest_methodology(parsed_metrics)
+
+        prompt = f"""
+Based on the following project metrics and historical data:
+
+Project Metrics:
+Estimated LOC: {parsed_metrics.get('estimated_loc', 'N/A')}
+Complexity Level: {parsed_metrics.get('complexity_level', 'N/A')}
+
+Agile Metrics:
+Average Defect Density: {agile_data.get('average_defect_density', 'N/A')}
+Average Resolution Time: {agile_data.get('average_resolution_time', 'N/A')}
+
+Waterfall Metrics:
+Average Defect Density: {waterfall_data.get('average_defect_density', 'N/A')}
+Average Resolution Time: {waterfall_data.get('average_resolution_time', 'N/A')}
+
+Recommend the optimal methodology (Agile or Waterfall) for this project and justify your recommendation.
+"""
+        recommendation_content = call_openai_api(prompt)
+        return {
+            "recommended_methodology": recommendation,
+            "recommendation_details": recommendation_content
+        }
+    except Exception as e:
+        logger.error(f"Error in /recommend_methodology/: {e}")
+        raise HTTPException(status_code=500, detail="An error occurred while recommending methodology.")
+
+# Benchmark Estimation Route
+@router.post("/benchmark_estimation/")
+async def benchmark_estimation(project: ProjectData):
+    """
+    Benchmarks the project estimation accuracy and assesses complexity manageability.
+    """
+    try:
+        parsed_metrics = parse_project_description(project.description)
+        estimation_accuracy = calculate_estimation_accuracy(parsed_metrics)
+        complexity_manageable = assess_complexity_manageability(parsed_metrics)
+
+        response = {
+            "estimation_accuracy": estimation_accuracy,
+            "complexity_manageable": complexity_manageable
+        }
+
+        # Handle cases where data is missing
+        messages = []
+        if estimation_accuracy is None:
+            messages.append("Estimation accuracy could not be calculated due to missing data.")
+        if complexity_manageable is None:
+            messages.append("Complexity manageability could not be assessed due to missing WMC or CBO values.")
+        if messages:
+            response["message"] = " ".join(messages)
+
+        return response
+    except Exception as e:
+        logger.error(f"Error in /benchmark_estimation/: {e}")
+        raise HTTPException(status_code=500, detail="An error occurred while benchmarking estimation.")
+
+# Additional Analysis Routes
+
+@router.get("/analysis/promise/defect_density", response_class=HTMLResponse)
+async def promise_defect_density_analysis(request: Request):
+    """
+    Displays analysis of defect density by methodology in the PROMISE dataset.
+    """
+    try:
+        df = promise_df.copy()
+        df = df.dropna(subset=['defect_density', 'assigned_methodology'])
+        df_grouped = df.groupby('assigned_methodology')['defect_density'].mean().reset_index()
+        fig = px.bar(df_grouped, x='assigned_methodology', y='defect_density', title='Average Defect Density by Methodology')
+        chart_html = fig.to_html(full_html=False)
+        description = "This chart illustrates the average defect density for projects using Agile and Waterfall methodologies based on the PROMISE dataset."
+        return templates.TemplateResponse("defect_density_analysis.html", {
+            "request": request,
+            "chart": chart_html,
+            "description": description
+        })
+    except Exception as e:
+        logger.error(f"Error generating defect density analysis: {e}")
+        raise HTTPException(status_code=500, detail="An error occurred while generating the defect density analysis.")
+
+@router.get("/analysis/tawos/effort_comparison", response_class=HTMLResponse)
+async def tawos_effort_comparison(request: Request):
+    """
+    Displays a comparison of average effort minutes between methodologies in the TAWOS dataset.
+    """
+    try:
+        query = text("""
+        SELECT
+            Project.methodology,
+            AVG(Issue.Total_Effort_Minutes) as avg_effort_minutes
+        FROM Project
+        JOIN Issue ON Project.ID = Issue.Project_ID
+        GROUP BY Project.methodology
+        """)
+        with engine.connect() as conn:
+            df = pd.read_sql_query(query, conn)
+        fig = px.bar(df, x='methodology', y='avg_effort_minutes', title='Average Effort Minutes by Methodology')
+        chart_html = fig.to_html(full_html=False)
+        description = "This chart compares the average effort in minutes for issues in projects using Agile and Waterfall methodologies in the TAWOS dataset."
+        return templates.TemplateResponse("effort_comparison.html", {
+            "request": request,
+            "chart": chart_html,
+            "description": description
+        })
+    except SQLAlchemyError as e:
+        logger.error(f"Database error in /analysis/tawos/effort_comparison: {e}")
+        raise HTTPException(status_code=500, detail="An error occurred while accessing the database.")
+    except Exception as e:
+        logger.error(f"Error generating effort comparison: {e}")
+        raise HTTPException(status_code=500, detail="An error occurred while generating the effort comparison.")
+
+
+###########################~~~~~~~~~~~~~~~~~~~~~~~~~~##############################
+
+@router.get("/all_analysis", response_class=HTMLResponse)
+async def all_analysis_page(request: Request):
+    """
+    Renders the all_analysis.html page as a static page.
+    """
+    return templates.TemplateResponse("all_analysis.html", {"request": request})
+
+
+
+################################
+@router.get("/comprehensive_analysis", response_class=HTMLResponse)
+async def comprehensive_analysis(request: Request, description: str):
+    """
+    Generates a comprehensive analysis by combining the project description with insights
+    from the PROMISE and TAWOS datasets, and returns a professional project management guide.
+    """
+    try:
+        # The description is passed as a query parameter (e.g., /comprehensive_analysis?description=...)
+        project_description = description  # Retrieved from the query string
+
+        # Read PROMISE and TAWOS analysis summaries from text files
+        with open("data/promise_O.txt", "r") as f:
+            promise_analysis = f.read()
+        with open("data/tawos_O.txt", "r") as f:
+            tawos_analysis = f.read()
+
+        # Define separate prompts for each section
+        strategy_prompt = (
+            f"Based on the following project description, recommend the most effective management strategy. "
+            f"Consider Agile, Waterfall, or a hybrid approach and justify your recommendation.\n\n"
+            f"Project Description:\n{project_description}"
+        )
+
+        recommendations_prompt = (
+            f"Generate a high-level, professional step-by-step project management guide based on the following project description. "
+            f"Structure the recommendations into major phases (e.g., Initiation, Planning, Design, Development, Testing, Deployment, Monitoring, and Closure), "
+            f"and provide a concise summary of key actions and expected outcomes in each phase. Use a formal tone.\n\n"
+            f"Project Description:\n{project_description}"
+        )
+
+        promise_insights_prompt = (
+            f"Summarize the following PROMISE dataset insights as they relate to software quality, defect rates, and methodology "
+            f"for the described project. Suggest how these insights might improve the project's outcomes.\n\n"
+            f"PROMISE Dataset Insights:\n{promise_analysis}"
+        )
+
+        tawos_insights_prompt = (
+            f"Summarize the following TAWOS dataset insights with respect to effort, resolution times, and productivity. "
+            f"Provide suggestions on how these insights can optimize resource allocation and project timelines.\n\n"
+            f"TAWOS Dataset Insights:\n{tawos_analysis}"
+        )
+
+        summarized_insights_prompt = (
+            f"Based on the following PROMISE and TAWOS dataset insights, provide a combined summary. "
+            f"Highlight key points that could influence project success and suggest how these insights together inform best practices "
+            f"for project management.\n\nPROMISE Dataset Insights:\n{promise_analysis}\n\nTAWOS Dataset Insights:\n{tawos_analysis}"
+        )
+        final_conclusion_prompt = (
+            f"Based on the insights from the PROMISE and TAWOS datasets, along with the project description, provide a final conclusion "
+            f"that summarizes the key takeaways and offers a final recommendation for the project's success.\n\n"
+            f"Project Description:\n{project_description}\n\n"
+            f"PROMISE Dataset Insights:\n{promise_analysis}\n\nTAWOS Dataset Insights:\n{tawos_analysis}"
+        )
+
+        # Call OpenAI API for each section and log the responses for debugging
+        management_strategy = call_openai_api(strategy_prompt) or "No management strategy generated."
+        recommendations = call_openai_api(recommendations_prompt).split('\n') or ["No recommendations generated."]
+        promise_insights = call_openai_api(promise_insights_prompt) or "No insights from PROMISE dataset."
+        tawos_insights = call_openai_api(tawos_insights_prompt) or "No insights from TAWOS dataset."
+        summarized_insights = call_openai_api(summarized_insights_prompt) or "No summarized insights."
+        final_conclusion = call_openai_api(final_conclusion_prompt) or "No final conclusion generated."
+
+        # Log the raw responses to verify their content
+        logger.info(f"Management Strategy: {management_strategy}")
+        logger.info(f"Recommendations: {recommendations}")
+        logger.info(f"PROMISE Insights: {promise_insights}")
+        logger.info(f"TAWOS Insights: {tawos_insights}")
+        logger.info(f"Summarized Insights: {summarized_insights}")
+        logger.info(f"Final Conclusion: {final_conclusion}")
+
+        # Render the response in the template
+        return templates.TemplateResponse("comprehensive_analysis.html", {
+            "request": request,
+            "description": project_description,
+            "management_strategy": management_strategy,
+            "recommendations": recommendations,
+            "promise_insights": promise_insights,
+            "tawos_insights": tawos_insights,
+            "summarized_insights": summarized_insights,
+            "final_conclusion": final_conclusion
+        })
+
+    except Exception as e:
+        logger.error(f"Error in /comprehensive_analysis: {e}")
+        raise HTTPException(status_code=500, detail="An error occurred while generating the comprehensive analysis.")
+# routers/risk_analysis.py
+
+from fastapi import APIRouter, HTTPException
+from models import ProjectData
+from utils import parse_project_description, call_openai_api, estimate_defect_rate, calculate_risk_score
+from database import query_promise_dataset, query_tawos_dataset
+import logging
+
+router = APIRouter()
+
+@router.post("/identify_risks/")
+async def identify_risks(project: ProjectData):
+    try:
+        parsed_metrics = parse_project_description(project.description)
+        promise_data = query_promise_dataset(parsed_metrics)
+        tawos_data = query_tawos_dataset(parsed_metrics)
+        defect_rate = estimate_defect_rate(parsed_metrics, promise_data)
+        risk_score = calculate_risk_score(parsed_metrics, {**promise_data, **tawos_data})
+
+        prompt = f"""
+Based on the project description and the following metrics:
+Estimated LOC: {parsed_metrics['estimated_loc']}
+Complexity Level: {parsed_metrics['complexity_level']}
+Methodology: {parsed_metrics['methodology']}
+Historical Average Defect Density: {promise_data['average_defect_density']}
+Estimated Defect Rate: {defect_rate}
+Risk Score: {risk_score}
+
+Provide a risk assessment report that highlights potential challenges and recommendations.
+"""
+        assessment = call_openai_api(prompt)
+        return {
+            "defect_rate": defect_rate,
+            "risk_score": risk_score,
+            "assessment": assessment
+        }
+    except Exception as e:
+        logging.error(f"Error in /identify_risks/: {e}")
+        raise HTTPException(status_code=500, detail="An error occurred while identifying risks.")
+
+***************************************************************************************************
+
+// static/js/index.js
+
+// Global variables
+let cleanedDescription = '';
+
+// Function to escape HTML to prevent XSS
+function escapeHtml(unsafe) {
+    return unsafe
+         .replace(/&/g, "&amp;")
+         .replace(/</g, "&lt;")
+         .replace(/>/g, "&gt;")
+         .replace(/"/g, "&quot;")
+         .replace(/'/g, "&#039;");
+}
+
+// Function to check if the cleaned description is available
+function checkCleanedDescription() {
+    if (!cleanedDescription || cleanedDescription.trim() === "") {
+        cleanedDescription = sessionStorage.getItem('cleanedDescription');
+        if (!cleanedDescription || cleanedDescription.trim() === "") {
+            alert('Cleaned description is not available. Please analyse the project first.');
+            return false;
+        }
+    }
+    return true;
+}
+
+// Document ready function
+document.addEventListener('DOMContentLoaded', function() {
+    // Event listener for 'Submit Description' button on index.html
+    const submitDescriptionButton = document.getElementById('submitDescriptionButton');
+    if (submitDescriptionButton) {
+        submitDescriptionButton.addEventListener('click', submitDescription);
+    }
+
+    // Event listener for 'Generate Charts' button
+    const generateChartsButton = document.getElementById('generateChartsButton');
+    if (generateChartsButton) {
+        generateChartsButton.addEventListener('click', generateChartsHandler);
+    }
+
+    // Event listener for 'View Analyses' button
+    const viewAnalysesButton = document.getElementById('viewAnalysesButton');
+    if (viewAnalysesButton) {
+        viewAnalysesButton.addEventListener('click', function() {
+            window.location.href = '/all_analysis';
+        });
+    }
+
+    // Event listener for 'Clean Description' button on clean_description.html
+    const cleanDescriptionButton = document.getElementById('cleanDescriptionButton');
+    if (cleanDescriptionButton) {
+        cleanDescriptionButton.addEventListener('click', cleanDescriptionHandler);
+    }
+
+    // Event listener for 'Comprehensive Analysis' button
+    const comprehensiveAnalysisButton = document.getElementById('comprehensiveAnalysisButton');
+    if (comprehensiveAnalysisButton) {
+        comprehensiveAnalysisButton.addEventListener('click', function() {
+            if (checkCleanedDescription()) {
+                window.location.href = '/comprehensive_analysis?description=' + encodeURIComponent(cleanedDescription);
+            } else {
+                alert('Please analyze the project first.');
+            }
+        });
+    }
+
+    // Attach event listeners for stage-specific pages
+    attachStageEventListeners();
+
+    // Update navbar links with cleaned description
+    updateNavbarLinks();
+
+    // Attach event listener for 'Test Prototype' button
+    attachTestPrototypeListener();
+
+    // Additional page-specific initialization
+    initializePage();
+
+    // If on all_analysis.html, fetch all analyses
+    if (window.location.pathname === '/all_analysis') {
+        fetchAllAnalyses();
+    }
+});
+
+
+// Function to submit the project description and initiate analyses
+async function submitDescription() {
+    const descriptionInput = document.getElementById('description');
+    const description = descriptionInput.value.trim();
+
+    if (!description) {
+        alert('Please enter a project description.');
+        return;
+    }
+
+    try {
+        // Clean the description
+        cleanedDescription = await cleanDescription(description);
+
+        // Display the cleaned description
+        displayCleanedDescription(cleanedDescription);
+
+        // Store the cleaned description in sessionStorage
+        sessionStorage.setItem('cleanedDescription', cleanedDescription);
+
+        // Perform analyses
+        await identifyRisks(cleanedDescription);
+        await getMethodologyRecommendation(cleanedDescription);
+        await benchmarkEstimation(cleanedDescription);
+
+        // Show the buttons to generate charts and view analyses
+        document.getElementById('generateChartsButton').style.display = 'inline-block';
+        document.getElementById('viewAnalysesButton').style.display = 'inline-block';
+        document.getElementById('comprehensiveAnalysisButton').style.display = 'inline-block';
+
+    } catch (error) {
+        console.error("Error processing description:", error);
+        alert("Failed to process the project description. Please check your API or network connection.");
+    }
+}
+
+// Function to clean the project description using the backend API
+async function cleanDescription(description) {
+    const response = await fetch('/clean_description/', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ description: description })
+    });
+
+    if (!response.ok) throw new Error("Network response was not ok");
+
+    const data = await response.json();
+    return data.cleaned_description;
+}
+
+// Function to handle cleaning the description on clean_description.html
+async function cleanDescriptionHandler() {
+    const descriptionInput = document.getElementById('projectDescription');
+    const description = descriptionInput.value.trim();
+
+    if (!description) {
+        alert('Please enter a project description.');
+        return;
+    }
+
+    try {
+        // Clean the description
+        cleanedDescription = await cleanDescription(description);
+
+        // Display the cleaned description
+        const cleanedDescriptionElement = document.getElementById('cleanedDescription');
+        cleanedDescriptionElement.innerText = cleanedDescription;
+        document.getElementById('cleanedDescriptionSection').style.display = 'block';
+
+        // Update the 'Proceed to Analysis' link
+        const proceedLink = document.getElementById('proceedToAnalysisLink');
+        proceedLink.href = '/all_analysis?description=' + encodeURIComponent(cleanedDescription);
+
+        // Store the cleaned description in sessionStorage
+        sessionStorage.setItem('cleanedDescription', cleanedDescription);
+
+    } catch (error) {
+        console.error('Error cleaning description:', error);
+        alert('Failed to clean description. Please check your API or network connection.');
+    }
+}
+
+// Function to display the cleaned description on the page
+function displayCleanedDescription(cleanedDescription) {
+    const cleanedResultElement = document.getElementById('cleaned-result');
+    cleanedResultElement.innerHTML = '';
+    const strongElement = document.createElement('strong');
+    strongElement.textContent = 'Cleaned Description:';
+    cleanedResultElement.appendChild(strongElement);
+    cleanedResultElement.appendChild(document.createElement('br'));
+    const descriptionTextNode = document.createTextNode(cleanedDescription);
+    cleanedResultElement.appendChild(descriptionTextNode);
+}
+
+// Function to identify risks using the backend API
+async function identifyRisks(description) {
+    try {
+        const response = await fetch('/identify_risks/', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ description: description })
+        });
+
+        if (!response.ok) throw new Error("Network response was not ok");
+
+        const data = await response.json();
+
+        const assessmentContent = data.assessment || "No risk assessment available.";
+        document.getElementById('riskAssessmentContent').innerText = assessmentContent;
+        document.getElementById('riskAssessmentSection').style.display = 'block';
+
+    } catch (error) {
+        console.error("Error fetching risk assessment:", error);
+        alert("Failed to fetch risk assessment. Please check your API or network connection.");
+    }
+}
+
+// Function to get methodology recommendation using the backend API
+async function getMethodologyRecommendation(description) {
+    try {
+        const response = await fetch('/recommend_methodology/', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ description: description })
+        });
+
+        if (!response.ok) throw new Error("Network response was not ok");
+
+        const data = await response.json();
+
+        const recommendationContent = data.recommendation_details || "No recommendation available.";
+        document.getElementById('methodologyContent').innerText = recommendationContent;
+        document.getElementById('methodologySection').style.display = 'block';
+
+    } catch (error) {
+        console.error("Error fetching methodology recommendation:", error);
+        alert("Failed to fetch methodology recommendation. Please check your API or network connection.");
+    }
+}
+
+// Function to benchmark estimation using the backend API
+async function benchmarkEstimation(description) {
+    try {
+        const response = await fetch('/benchmark_estimation/', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ description: description })
+        });
+
+        if (!response.ok) throw new Error("Network response was not ok");
+
+        const data = await response.json();
+
+        let estimationContent = '';
+        if (data.estimation_accuracy !== null) {
+            estimationContent += `Estimation Accuracy: ${data.estimation_accuracy.toFixed(2)}%\n`;
+        } else {
+            estimationContent += `Estimation accuracy could not be calculated.\n`;
+        }
+        if (data.complexity_manageable !== null) {
+            estimationContent += `Complexity Manageability: ${data.complexity_manageable ? 'Manageable' : 'Not Manageable'}\n`;
+        } else {
+            estimationContent += `Complexity manageability could not be assessed.\n`;
+        }
+        if (data.message) {
+            estimationContent += `\n${data.message}`;
+        }
+
+        document.getElementById('estimationContent').innerText = estimationContent;
+        document.getElementById('estimationSection').style.display = 'block';
+
+    } catch (error) {
+        console.error("Error fetching estimation benchmarking:", error);
+        alert("Failed to fetch estimation benchmarking. Please check your API or network connection.");
+    }
+}
+
+// Function to handle generating charts
+// Function to handle generating charts with added null and data validation
+async function generateChartsHandler() {
+    if (!checkCleanedDescription()) return;
+
+    try {
+        const response = await fetch('/generate_productivity/', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ description: cleanedDescription })
+        });
+
+        if (!response.ok) throw new Error("Network response was not ok");
+
+        const data = await response.json();
+
+        // Check for null, undefined, and data type validation in the API response
+        const agileData = data.agile_productivity;
+        const waterfallData = data.waterfall_productivity;
+
+        if (
+            !Array.isArray(agileData) || agileData.length !== 5 || agileData.some(value => typeof value !== 'number' || isNaN(value)) ||
+            !Array.isArray(waterfallData) || waterfallData.length !== 5 || waterfallData.some(value => typeof value !== 'number' || isNaN(value))
+        ) {
+            throw new Error("Invalid data format or non-numeric/missing values received from the server.");
+        }
+
+        // Generate charts
+        generateCharts(agileData, waterfallData);
+        document.getElementById('chartsSection').style.display = 'flex';
+
+    } catch (error) {
+        console.error("Error fetching or validating productivity data:", error);
+        alert("Failed to fetch or validate productivity data. Please check your API or network connection.");
+    }
+}
+
+
+// Function to generate productivity charts using Chart.js
+function generateCharts(agileValues, waterfallValues) {
+    // Labels for the charts
+    const labels = agileValues.map((_, index) => `Point ${index + 1}`);
+
+    // Agile Productivity Chart Data
+    const agileChartData = {
+        labels: labels,
+        datasets: [{
+            label: 'Agile Productivity',
+            data: agileValues,
+            backgroundColor: 'rgba(75, 192, 192, 0.6)',
+            borderColor: 'rgba(75, 192, 192, 1)',
+            borderWidth: 2
+        }]
+    };
+
+    // Waterfall Productivity Chart Data
+    const waterfallChartData = {
+        labels: labels,
+        datasets: [{
+            label: 'Waterfall Productivity',
+            data: waterfallValues,
+            backgroundColor: 'rgba(255, 99, 132, 0.6)',
+            borderColor: 'rgba(255, 99, 132, 1)',
+            borderWidth: 2
+        }]
+    };
+
+    // Configuration for Agile Chart
+    const configAgile = {
+        type: 'bar',
+        data: agileChartData,
+        options: getChartOptions()
+    };
+
+    // Configuration for Waterfall Chart
+    const configWaterfall = {
+        type: 'bar',
+        data: waterfallChartData,
+        options: getChartOptions()
+    };
+
+    // Destroy existing charts if they exist
+    if (window.agileChartInstance) {
+        window.agileChartInstance.destroy();
+    }
+    if (window.waterfallChartInstance) {
+        window.waterfallChartInstance.destroy();
+    }
+
+    // Render Agile Chart
+    const agileCtx = document.getElementById('agileChart').getContext('2d');
+    window.agileChartInstance = new Chart(agileCtx, configAgile);
+
+    // Render Waterfall Chart
+    const waterfallCtx = document.getElementById('waterfallChart').getContext('2d');
+    window.waterfallChartInstance = new Chart(waterfallCtx, configWaterfall);
+}
+
+// Helper function to get common chart options
+function getChartOptions() {
+    return {
+        responsive: true,
+        maintainAspectRatio: false,
+        scales: {
+            y: {
+                beginAtZero: true,
+                title: {
+                    display: true,
+                    text: 'Productivity'
+                }
+            },
+            x: {
+                title: {
+                    display: true,
+                    text: 'Time Points'
+                }
+            }
+        },
+        plugins: {
+            legend: {
+                display: true,
+                position: 'top'
+            }
+        }
+    };
+}
+
+// Function to attach event listeners for stage-specific pages
+function attachStageEventListeners() {
+    // Map of stage IDs to their corresponding generate functions
+    const stageFunctions = {
+        'generateDesignButton': generateDesign,
+        'generatePrototypingButton': generatePrototyping,
+        'generateCustomerEvaluationButton': generateCustomerEvaluationPlan,
+        'generateReviewUpdateButton': generateReviewUpdatePlan,
+        'generateDevelopmentButton': generateDevelopmentPlan,
+        'generateTestingButton': generateTesting,
+        'generateMaintenanceButton': generateMaintenancePlan
+    };
+
+    for (const [buttonId, func] of Object.entries(stageFunctions)) {
+        const button = document.getElementById(buttonId);
+        if (button) {
+            button.addEventListener('click', func);
+        }
+    }
+}
+
+// Function to update navbar links with the cleaned description
+function updateNavbarLinks() {
+    const navLinks = document.querySelectorAll('#nav-links a');
+    if (navLinks.length > 0) {
+        let description = sessionStorage.getItem('cleanedDescription') || '';
+        if (description) {
+            const encodedDescription = encodeURIComponent(description);
+            navLinks.forEach(function(link) {
+                const href = link.getAttribute('href').split('?')[0];
+                link.setAttribute('href', `${href}?description=${encodedDescription}`);
+            });
+        }
+    }
+}
+
+// Function to initialize page-specific content
+function initializePage() {
+    // For identified_risks.html
+    const identifiedRisksContent = document.getElementById('identifiedRisksContent');
+    if (identifiedRisksContent && !identifiedRisksContent.innerText.trim()) {
+        fetchRiskContent('/identify_risks/', 'assessment', 'identifiedRisksContent');
+    }
+
+    // For risk_assessment.html
+    const riskAssessmentContent = document.getElementById('riskAssessmentContent');
+    if (riskAssessmentContent && !riskAssessmentContent.innerText.trim()) {
+        fetchRiskContent('/generate_risk_assessment/', 'assessment', 'riskAssessmentContent');
+    }
+
+    // For risk_mitigation.html
+    const riskMitigationContent = document.getElementById('riskMitigationContent');
+    if (riskMitigationContent && !riskMitigationContent.innerText.trim()) {
+        fetchRiskContent('/generate_risk_mitigation/', 'mitigation_strategies', 'riskMitigationContent');
+    }
+}
+
+// General function to fetch risk content
+async function fetchRiskContent(endpoint, dataKey, contentElementId) {
+    if (!checkCleanedDescription()) return;
+
+    try {
+        const response = await fetch(endpoint, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ description: cleanedDescription })
+        });
+
+        if (!response.ok) throw new Error('Network response was not ok');
+
+        const data = await response.json();
+        document.getElementById(contentElementId).innerText = data[dataKey];
+
+    } catch (error) {
+        console.error(`Error fetching content from ${endpoint}:`, error);
+        alert('Failed to fetch content. Please check your API or network connection.');
+    }
+}
+
+// Function to generate Design content
+async function generateDesign() {
+    await generateStageContent('design', 'design_content');
+}
+
+// Function to generate Prototyping content
+async function generatePrototyping() {
+    await generateStageContent('prototyping', 'prototyping_content');
+}
+
+// Function to generate Customer Evaluation Plan
+async function generateCustomerEvaluationPlan() {
+    await generateStageContent('customer_evaluation', 'customer_evaluation_content');
+}
+
+// Function to generate Review and Update Plan
+async function generateReviewUpdatePlan() {
+    await generateStageContent('review_and_update', 'review_update_content');
+}
+
+// Function to generate Development Plan
+async function generateDevelopmentPlan() {
+    await generateStageContent('development', 'development_content');
+}
+
+// Function to generate Testing Plan
+async function generateTesting() {
+    await generateStageContent('testing', 'testing_content');
+}
+
+// Function to generate Maintenance Plan
+async function generateMaintenancePlan() {
+    await generateStageContent('maintenance', 'maintenance_content');
+}
+
+// General function to generate content for a stage
+async function generateStageContent(stage, contentElementId) {
+    if (!checkCleanedDescription()) return;
+
+    try {
+        const response = await fetch(`/generate_${stage}/`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ description: cleanedDescription })
+        });
+
+        if (!response.ok) throw new Error(`Network response was not ok`);
+
+        const data = await response.json();
+        document.getElementById(contentElementId).innerText = data[`${stage}_content`];
+
+    } catch (error) {
+        console.error(`Error fetching ${stage} content:`, error);
+        alert(`Failed to generate ${stage} plan. Please check your API or network connection.`);
+    }
+}
+
+// Function to attach event listener for 'Test Prototype' button
+function attachTestPrototypeListener() {
+    const testButton = document.getElementById('testButton');
+    if (testButton) {
+        testButton.addEventListener('click', testPrototype);
+    }
+}
+
+// Function to handle prototype testing
+async function testPrototype() {
+    const testDescriptionInput = document.getElementById('test_description');
+    const testDescription = testDescriptionInput.value.trim();
+
+    // Retrieve cleanedDescription from sessionStorage
+    let cleanedDescription = sessionStorage.getItem('cleanedDescription');
+
+    if (!testDescription) {
+        alert('Please enter a test description.');
+        return;
+    }
+
+    if (!cleanedDescription || cleanedDescription.trim() === "") {
+        alert('Cleaned description is not available. Please return to the main page and analyze the project first.');
+        return;
+    }
+
+    try {
+        // Disable the test button to prevent multiple submissions
+        const testButton = document.getElementById('testButton');
+        testButton.disabled = true;
+
+        const response = await fetch('/test_prototype/', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+                description: cleanedDescription,
+                test_description: testDescription
+            })
+        });
+
+        if (!response.ok) throw new Error('Network response was not ok');
+
+        const data = await response.json();
+        document.getElementById('test_results').innerText = data.test_results;
+        document.getElementById('testResultSection').style.display = 'block';
+        testButton.disabled = false;
+    } catch (error) {
+        console.error('Error during prototype testing:', error);
+        alert('Failed to test prototype. Please check your API or network connection.');
+        document.getElementById('testButton').disabled = false;
+    }
+}
+
+// Function to fetch and display all analyses on all_analysis.html
+async function fetchAllAnalyses() {
+    if (!checkCleanedDescription()) return;
+
+    try {
+        // Fetch Defect Density Analysis
+        await fetchAnalysis('/analysis/promise/defect_density', 'defectDensityAnalysis', 'Defect Density Analysis');
+        
+        // Fetch Effort and Resolution Time Comparison
+        await fetchAnalysis('/analysis/tawos/effort_resolution_comparison', 'effortResolutionTimeComparison', 'Effort and Resolution Time Analysis');
+        
+        // Fetch T-Tests Analysis
+        await fetchAnalysis('/analysis/promise/t_tests', 'tTestsAnalysis', 'T-Tests Analysis');
+        
+    } catch (error) {
+        console.error('Error fetching analyses:', error);
+        alert('Failed to fetch analyses. Please check your API or network connection.');
+    }
+}
+
+// Helper function to fetch each analysis
+async function fetchAnalysis(endpoint, elementId, analysisName) {
+    try {
+        const response = await fetch(endpoint, {
+            method: 'GET',
+            headers: { 'Content-Type': 'application/json' }
+        });
+        
+        if (response.ok) {
+            const content = await response.text();
+            document.getElementById(elementId).innerHTML = content;
+        } else {
+            document.getElementById(elementId).innerHTML = `<p>Failed to load ${analysisName}.</p>`;
+        }
+    } catch (error) {
+        console.error(`Error fetching ${analysisName}:`, error);
+        document.getElementById(elementId).innerHTML = `<p>Failed to load ${analysisName} due to a network error.</p>`;
+    }
+}
+
+// Function to check if the analysis is ready and display the button
+function checkAnalysisComplete() {
+    // Add logic to determine if the analysis is complete
+    return true; // Placeholder return
+}
+
+// Modify existing functions or add new ones to update the display of the button based on the completion of the analysis
+
+****************************************************************************
+
+{% extends "base.html" %}
+
+{% block title %}All Analyses{% endblock %}
+
+{% block content %}
+<h1>Comprehensive Analysis Dashboard</h1>
+<div class="content-wrapper">
+    <p class="lead">
+        This dashboard consolidates all project analyses from the PROMISE and TAWOS datasets, designed to facilitate data-driven decision-making for software project management. Each section provides findings and insights based on the specific dataset, along with actionable recommendations.
+    </p>
+</div>
+
+<!-- Summary and Recommendations Section -->
+<div class="content-wrapper">
+    <h2>Summary of Findings and Recommendations</h2>
+    <p>This section summarizes the combined findings from the PROMISE and TAWOS datasets, providing a holistic view of key software project metrics and performance indicators.</p>
+
+    <h3>Summary of Findings</h3>
+    <ul>
+        <li><strong>Methodology Suitability:</strong> Analysis of project metrics, such as Weighted Method per Class (WMC) and Lines of Code (LOC) from the PROMISE dataset, helps classify projects by Agile or Waterfall suitability based on complexity and project size.</li>
+        <li><strong>Defect Density and Code Quality:</strong> The TAWOS dataset reveals that Agile projects tend to have lower defect densities in complex projects, which aligns with an iterative improvement approach, while Waterfall projects maintain consistent quality in larger, stable projects.</li>
+        <li><strong>Effort and Resolution Times:</strong> TAWOS dataset insights indicate varied results for effort and resolution times, suggesting the need for methodology-specific optimizations for large-scale, high-effort projects like those observed in Atlassian Confluence Server.</li>
+    </ul>
+
+    <h3>Recommendations</h3>
+    <ul>
+        <li><strong>Metric Thresholds by Project Type:</strong> For high-complexity projects, customize Weighted Method per Class (WMC) and Lines of Code (LOC) thresholds to ensure they align with Agile or Waterfall goals, based on PROMISE dataset insights.</li>
+        <li><strong>Effort Optimization:</strong> Use Agile for rapid iteration in high-effort tasks to reduce average resolution times, leveraging findings from the TAWOS dataset.</li>
+        <li><strong>Backlog and Quality Management:</strong> Emphasize backlog management and quality assessments to address higher defect densities, as indicated by the TAWOS dataset analysis.</li>
+    </ul>
+</div>
+
+<!-- Defect Density Analysis -->
+<div class="content-wrapper">
+    <h2>Defect Density Analysis (TAWOS Dataset)</h2>
+    <p>This analysis, based on the TAWOS dataset, calculates defect density across various projects, providing insights into code quality and areas for potential improvement.</p>
+    <div class="content" id="defect_density_analysis">
+        <table>
+            <tr><th>Project Name</th><th>Defect Density</th></tr>
+            <tr><td>Spring XD</td><td>0.000172</td></tr>
+            <tr><td>Spring DataCass</td><td>0.000107</td></tr>
+            <tr><td>Sonatype Nexus</td><td>0.000124</td></tr>
+            <!-- Add all other projects from TAWOS dataset here as shown in the file -->
+        </table>
+    </div>
+    <p><strong>Explanation:</strong> Lower defect densities, particularly in Agile projects (e.g., Spring XD, Sonatype Nexus), indicate better code quality through iterative improvement. This trend suggests that Agile's flexibility is advantageous in maintaining quality for complex, dynamic applications.</p>
+</div>
+
+<!-- Effort and Resolution Time Comparison Analysis -->
+<div class="content-wrapper">
+    <h2>Effort and Resolution Time Comparison (TAWOS Dataset)</h2>
+    <p>This analysis uses TAWOS dataset metrics to compare average effort and resolution times across Agile and Waterfall methodologies. It highlights project-specific differences, providing insight into methodology efficiency.</p>
+    <div class="content" id="effort_resolution_time_analysis">
+        <table>
+            <tr><th>Project Name</th><th>Average Effort Minutes</th><th>Average Resolution Time</th></tr>
+            <tr><td>Apache Mesos</td><td>72047.44</td><td>402868.4</td></tr>
+            <tr><td>Apache MXNet</td><td>8473.68</td><td>60627.1</td></tr>
+            <tr><td>Atlassian Bamboo</td><td>112681.00</td><td>1102510.0</td></tr>
+            <!-- Add all other projects from TAWOS dataset here as shown in the file -->
+        </table>
+    </div>
+    <p><strong>Explanation:</strong> Projects such as Apache Mesos and Atlassian Bamboo show high average effort and resolution times. These findings highlight opportunities to optimize backlog management and methodology adaptation for large-scale projects in Waterfall environments.</p>
+</div>
+
+<!-- Correlations Analysis -->
+<div class="content-wrapper">
+    <h2>Correlations Analysis (PROMISE Dataset)</h2>
+    <p>This section explores correlations among key software metrics from the PROMISE dataset, such as Weighted Method per Class (WMC), Coupling Between Objects (CBO), and Defect Rate. Understanding these correlations aids in assessing project quality and complexity management.</p>
+    <div class="content" id="correlations_analysis">
+        <pre>
+            Complexity vs Defect Rate Correlation:
+            wmc   cbo   rfc   bug
+            wmc   1.000 0.368 0.857 0.339
+            cbo   0.368 1.000 0.414 0.218
+            rfc   0.857 0.414 1.000 0.405
+            bug   0.339 0.218 0.405 1.000
+        </pre>
+    </div>
+    <p><strong>Explanation:</strong> Strong correlations between complexity metrics (such as WMC and RFC) and defect rates suggest that managing code complexity can help minimize defect rates, thereby enhancing overall project quality and reliability.</p>
+</div>
+
+<!-- T-Tests Analysis -->
+<div class="content-wrapper">
+    <h2>T-Tests Analysis (TAWOS Dataset)</h2>
+    <p>This section performs T-tests on the TAWOS dataset metrics, comparing Agile and Waterfall methodologies for two primary measures: effort (in minutes) and resolution time. This helps assess if the observed differences are statistically significant.</p>
+    <div class="content" id="t_tests_analysis">
+        <table>
+            <tr><th>Metric</th><th>T-Statistic</th><th>P-Value</th></tr>
+            <tr><td>Effort Minutes</td><td>0.658</td><td>0.629</td></tr>
+            <tr><td>Resolution Time</td><td>-1.888</td><td>0.310</td></tr>
+        </table>
+    </div>
+    <p><strong>Explanation:</strong> The T-tests indicate that differences in effort and resolution times between Agile and Waterfall are not statistically significant (p-values > 0.05). This suggests that while methodology selection affects certain metrics, it may not consistently yield significant efficiency gains for all project types.</p>
+</div>
+
+<!-- PROMISE Dataset Graphs -->
+<div class="content-wrapper">
+    <h2>Graphical Analysis (PROMISE Dataset)</h2>
+    
+    <h3>Average LOC per Method by Methodology</h3>
+    <img src="/static/promise/1.png" alt="Average LOC per Method by Methodology">
+    <p><strong>Explanation:</strong> This graph compares the average Lines of Code (LOC) per method for Agile and Waterfall methodologies. Waterfall projects show a significantly higher LOC per method, indicating larger codebases, which may contribute to increased complexity and maintenance challenges.</p>
+    
+    <h3>Defect Severity by Project Size</h3>
+    <img src="/static/promise/2.png" alt="Defect Severity by Project Size">
+    <p><strong>Explanation:</strong> The chart illustrates how defect severity varies with project size. Larger projects exhibit higher average defect severity, likely due to the increased complexity and interdependencies within large-scale systems.</p>
+
+    <h3>Defect Counts by Complexity Level and Methodology</h3>
+    <img src="/static/promise/3.png" alt="Defect Counts by Complexity Level and Methodology">
+    <p><strong>Explanation:</strong> This chart shows defect counts at various complexity levels, with Agile projects primarily in the low complexity range. This indicates that Agile is favored for less complex projects, whereas Waterfall projects span higher complexity levels, suggesting its applicability to more structured, complex systems.</p>
+
+    <h3>Coupling (CBO) by Methodology</h3>
+    <img src="/static/promise/4.png" alt="Coupling (CBO) by Methodology">
+    <p><strong>Explanation:</strong> This violin plot depicts Coupling Between Objects (CBO) for Agile and Waterfall methodologies. Waterfall projects exhibit higher CBO values, suggesting greater interdependency among components, which can increase the risk of cascading issues.</p>
+
+    <h3>Cohesion (CAM) by Methodology</h3>
+    <img src="/static/promise/5.png" alt="Cohesion (CAM) by Methodology">
+    <p><strong>Explanation:</strong> This plot compares cohesion levels between Agile and Waterfall methodologies. Agile projects show a broader range of cohesion, potentially indicating diverse approaches to modular design, whereas Waterfall projects are more centralized.</p>
+
+    <h3>WMC, CBO, and LOC by Methodology</h3>
+    <img src="/static/promise/6.png" alt="WMC, CBO, and LOC by Methodology">
+    <p><strong>Explanation:</strong> This series of box plots compares Weighted Methods per Class (WMC), Coupling Between Objects (CBO), and Lines of Code (LOC) for Agile and Waterfall projects. Waterfall projects generally have higher values for each metric, indicating that they may handle larger, more complex systems than Agile projects.</p>
+</div>
+<!-- TAWOS Dataset Graphs -->
+<div class="content-wrapper">
+    <h2>Graphical Analysis (TAWOS Dataset)</h2>
+    
+    <h3>Average Effort Minutes by Project and Sprint State</h3>
+    <img src="/static/tawos/1.png" alt="Average Effort Minutes by Project and Sprint State">
+    <p><strong>Explanation:</strong> This bar chart presents the average effort minutes for each project in the TAWOS dataset, segmented by sprint state (ACTIVE). Projects like Atlassian Bamboo and Lsstcorp Data Management have significantly higher effort minutes, indicating they may require more resources or time to complete, which is valuable information for resource allocation.</p>
+    
+    <h3>Average Resolution Time by Project and Sprint State</h3>
+    <img src="/static/tawos/2.png" alt="Average Resolution Time by Project and Sprint State">
+    <p><strong>Explanation:</strong> This bar chart shows the average resolution time (in minutes) for each project. Atlassian Confluence Server and Atlassian FishEye have notably high resolution times, indicating that issues in these projects take longer to resolve, possibly due to higher complexity or extensive interdependencies.</p>
+
+    <h3>Average Effort Minutes for Agile vs Waterfall Projects</h3>
+    <img src="/static/tawos/3.png" alt="Average Effort Minutes for Agile vs Waterfall Projects">
+    <p><strong>Explanation:</strong> This bar chart compares average effort minutes between Agile and Waterfall methodologies for selected projects. Agile projects (like Apache Mesos) generally show higher effort, likely due to the iterative nature of Agile, whereas Waterfall projects, such as Atlassian Confluence Cloud, have lower average effort minutes, reflecting their structured approach.</p>
+
+    <h3>Average Resolution Time for Agile vs Waterfall Projects</h3>
+    <img src="/static/tawos/4.png" alt="Average Resolution Time for Agile vs Waterfall Projects">
+    <p><strong>Explanation:</strong> This bar chart compares the average resolution times between Agile and Waterfall methodologies. The Waterfall project Atlassian Confluence Cloud has a substantially higher average resolution time, indicating that issues in Waterfall projects may take longer to resolve compared to Agile projects, which prioritize rapid iterations.</p>
+</div>
+
+
+{% endblock %}
+<!-- templates/base.html -->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>{% block title %}Project Management App{% endblock %}</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <!-- Google Font -->
+    <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;700&display=swap" rel="stylesheet">
+    <!-- Bootstrap CSS -->
+    <link href="https://maxcdn.bootstrapcdn.com/bootstrap/4.5.2/css/bootstrap.min.css" rel="stylesheet">
+    <!-- Custom CSS -->
+    <link href="/static/css/styles.css" rel="stylesheet">
+    {% block head %}{% endblock %}
+</head>
+<body>
+    <!-- Navigation Bar -->
+    {% include 'navbar.html' %}
+    <!-- Page Content -->
+    <div class="container mt-4">
+        {% block content %}{% endblock %}
+    </div>
+    <!-- Bootstrap JS and dependencies -->
+    <script src="https://code.jquery.com/jquery-3.5.1.slim.min.js"></script>
+    <!-- Proper Popper.js version for Bootstrap 4 -->
+    <script src="https://cdn.jsdelivr.net/npm/popper.js@1.16.1/dist/umd/popper.min.js"></script>
+    <script src="https://maxcdn.bootstrapcdn.com/bootstrap/4.5.2/js/bootstrap.min.js"></script>
+    <!-- Include index.js -->
+    <script src="/static/js/index.js"></script>
+</body>
+</html>
+<!-- templates/clean_description.html -->
+{% extends "base.html" %}
+
+{% block title %}Clean Project Description{% endblock %}
+
+{% block content %}
+<h1>Clean Project Description</h1>
+<div class="content-wrapper">
+    <p class="lead">
+        Enter your project description below. The system will clean and preprocess the description to prepare it for analysis.
+    </p>
+    <form id="cleanDescriptionForm">
+        <div class="form-group">
+            <label for="projectDescription">Project Description:</label>
+            <textarea class="form-control" id="projectDescription" name="description" rows="5" required></textarea>
+        </div>
+        <button type="button" class="btn btn-custom" id="cleanDescriptionButton">Clean Description</button>
+    </form>
+    <div id="cleanedDescriptionSection" style="display: none;">
+        <h2>Cleaned Description</h2>
+        <pre id="cleanedDescription"></pre>
+        <a id="proceedToAnalysisLink" href="#" class="btn btn-custom">Proceed to Analysis</a>
+    </div>
+</div>
+{% endblock %}
+<!-- templates/comprehensive_analysis.html -->
+{% extends "base.html" %}
+
+{% block title %}Comprehensive Project Analysis{% endblock %}
+
+{% block content %}
+<h1>Comprehensive Project Analysis</h1>
+<p class="lead">
+    This page provides a detailed, professional software project management guide based on the project description and analysis results. 
+    It combines insights from the PROMISE and TAWOS datasets and provides recommendations for effective project management strategies.
+</p>
+
+<div class="analysis-content">
+    <!-- Project Overview -->
+    <section class="overview-section">
+        <h2>Project Overview</h2>
+        <div class="content-wrapper">
+            <p>{{ description }}</p>
+        </div>
+    </section>
+
+    <!-- Recommended Management Strategy -->
+    <section class="strategy-section">
+        <h2>Recommended Management Strategy</h2>
+        <div class="content-wrapper">
+            <p>{{ management_strategy }}</p>
+        </div>
+    </section>
+
+    <!-- Step-by-Step Recommendations -->
+    <section class="recommendations-section">
+        <h2>Step-by-Step Recommendations</h2>
+        <div class="content-wrapper">
+            <ul>
+                {% for step in recommendations %}
+                    <li>{{ step }}</li>
+                {% endfor %}
+            </ul>
+        </div>
+    </section>
+
+    <!-- Dataset Insights -->
+    <section class="dataset-insights-section">
+        <h2>Dataset Insights</h2>
+
+        <!-- PROMISE Dataset Insights -->
+        <div class="content-wrapper">
+            <h3>PROMISE Dataset Insights</h3>
+            <p>{{ promise_insights }}</p> <!-- Updated to match backend -->
+        </div>
+
+        <!-- TAWOS Dataset Insights -->
+        <div class="content-wrapper">
+            <h3>TAWOS Dataset Insights</h3>
+            <p>{{ tawos_insights }}</p> <!-- Updated to match backend -->
+        </div>
+
+        <!-- Summarized Dataset Insights -->
+        <div class="content-wrapper">
+            <h3>Summarized Dataset Insights</h3>
+            <p>{{ summarized_insights }}</p> <!-- Updated to match backend -->
+        </div>
+    </section>
+
+    <!-- Final Conclusion -->
+    <section class="conclusion-section">
+        <h2>Final Conclusion</h2>
+        <div class="content-wrapper">
+            <p>{{ final_conclusion }}</p> <!-- Added final conclusion -->
+        </div>
+    </section>
+
+</div>
+{% endblock %}
+<!-- templates/customer_evaluation.html -->
+{% extends "base.html" %}
+
+{% block title %}Customer Evaluation Stage{% endblock %}
+
+{% block content %}
+<h1>Customer Evaluation Stage</h1>
+<div class="content-wrapper">
+    <p class="lead">
+        The customer evaluation stage involves presenting the product to stakeholders and end-users for feedback. This stage is crucial for understanding how well the product meets user needs and identifying areas for improvement. Feedback gathered is used to make necessary adjustments before the final release.
+    </p>
+    <!-- Buttons -->
+    <button id="generateCustomerEvaluationButton" class="btn btn-custom">Generate Customer Evaluation Plan</button>
+    <a href="/review_and_update?description={{ cleaned_description | urlencode }}" class="btn btn-custom">Next Stage: Review & Update</a>
+</div>
+<div class="content-wrapper">
+    <h2>{{ stage }} Process Description</h2>
+    <div class="content">
+        <pre id="customer_evaluation_content">{{ content }}</pre>
+    </div>
+</div>
+{% endblock %}
+<!-- templates/data_cleaning_methodology.html -->
+{% extends "base.html" %}
+
+{% block title %}Data Cleaning Methodology{% endblock %}
+
+{% block content %}
+<h1>Data Cleaning Methodology</h1>
+<div class="content-wrapper">
+    <p class="lead">
+        Understanding the data cleaning methodology is crucial for ensuring that the data used in analysis is accurate and reliable.
+    </p>
+    <h2>Overview</h2>
+    <p>
+        Data cleaning involves several steps to prepare the data for analysis. These steps include removing duplicates, handling missing values, correcting errors, and standardizing data formats.
+    </p>
+    <h2>Steps in Data Cleaning:</h2>
+    <ol>
+        <li><strong>Data Collection:</strong> Gathering data from various reliable sources.</li>
+        <li><strong>Data Integration:</strong> Combining data from different sources into a unified dataset.</li>
+        <li><strong>Data Cleaning:</strong>
+            <ul>
+                <li>Removing duplicates and irrelevant data.</li>
+                <li>Handling missing data through imputation or removal.</li>
+                <li>Correcting errors and inconsistencies.</li>
+            </ul>
+        </li>
+        <li><strong>Data Transformation:</strong> Normalizing or standardizing data to ensure consistency.</li>
+        <li><strong>Data Validation:</strong> Verifying the quality and integrity of the cleaned data.</li>
+    </ol>
+    <!-- Added a button to proceed to analysis if needed -->
+    <a href="/" class="btn btn-custom">Back to Home</a>
+    <a href="/analysis" class="btn btn-custom">View Analyses</a>
+</div>
+{% endblock %}
+<!-- templates/design.html -->
+{% extends "base.html" %}
+
+{% block title %}Design Stage{% endblock %}
+
+{% block content %}
+<h1>Design Stage</h1>
+<div class="content-wrapper">
+    <p class="lead">
+        The design stage is centered on creating a clear blueprint for the product based on user requirements and business objectives. This involves defining user stories, which break down features into smaller, manageable tasks that can be prioritized and developed. Wireframes and prototypes are created to visualize the product's interface and functionality, allowing for feedback and refinement of requirements. Additionally, planning the architecture is crucial to establish the technical structure and components needed to support the product. The design process is iterative, with regular reviews and adjustments to ensure alignment with evolving user needs and business goals.
+    </p>
+    <!-- Buttons -->
+    <button id="generateDesignButton" class="btn btn-custom">Generate Design</button>
+    <a href="/prototyping?description={{ cleaned_description | urlencode }}" class="btn btn-custom">Next Stage: Prototyping</a>
+</div>
+<div class="content-wrapper">
+    <h2>{{ stage }} Process Description</h2>
+    <div class="content">
+        <pre id="design_content">{{ content }}</pre>
+    </div>
+</div>
+{% endblock %}
+<!-- templates/development.html -->
+{% extends "base.html" %}
+
+{% block title %}Development Stage{% endblock %}
+
+{% block content %}
+<h1>Development Stage</h1>
+<div class="content-wrapper">
+    <p class="lead">
+        The development stage focuses on building the product according to the design specifications. This phase involves coding, configuring environments, and integrating various components. Developers work collaboratively to implement features, resolve technical challenges, and ensure that the codebase is maintainable and scalable.
+    </p>
+    <!-- Buttons -->
+    <button id="generateDevelopmentButton" class="btn btn-custom">Generate Development Plan</button>
+    <a href="/testing?description={{ cleaned_description | urlencode }}" class="btn btn-custom">Next Stage: Testing</a>
+</div>
+<div class="content-wrapper">
+    <h2>{{ stage }} Process Description</h2>
+    <div class="content">
+        <pre id="development_content">{{ content }}</pre>
+    </div>
+</div>
+{% endblock %}
+<!-- templates/identified_risks.html -->
+{% extends "base.html" %}
+
+{% block title %}Identified Risks{% endblock %}
+
+{% block content %}
+<h1>Identified Risks</h1>
+<div class="content-wrapper">
+    <p class="lead">
+        Below are the identified risks based on your project description.
+    </p>
+    <div class="content">
+        <pre id="identifiedRisksContent">{{ assessment }}</pre>
+    </div>
+    <!-- Buttons to navigate to other risk-related pages -->
+    <a href="/risk_assessment?description={{ cleaned_description | urlencode }}" class="btn btn-custom">Risk Assessment</a>
+    <a href="/risk_mitigation?description={{ cleaned_description | urlencode }}" class="btn btn-custom">Risk Mitigation</a>
+</div>
+{% endblock %}
+<!-- templates/index.html -->
+{% extends "base.html" %}
+
+{% block title %}Project Analysis and Methodology Recommendation{% endblock %}
+
+{% block content %}
+<h1>Project Analysis and Insights</h1>
+<link href="/static/css/styles.css" rel="stylesheet">
+
+<!-- Include Chart.js library -->
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+
+<!-- Project Description Input -->
+<div class="card mb-4">
+    <div class="card-header">Project Description</div>
+    <div class="card-body">
+        <form id="description-form">
+            <div class="form-group">
+                <label for="description">Enter your project description (including estimated LOC, complexity level, and methodology if known):</label>
+                <textarea class="form-control" id="description" name="description" rows="5" required></textarea>
+                <small class="form-text text-muted">Please include as many details as possible for accurate analysis.</small>
+            </div>
+            <button type="button" class="btn btn-custom" id="submitDescriptionButton">Analyse Project</button>
+        </form>
+        <div id="cleaned-result" class="mt-3"></div>
+    </div>
+</div>
+
+<!-- Result Sections -->
+<div id="riskAssessmentSection" class="result-section" style="display: none;">
+    <h2>Risk Assessment Report</h2>
+    <p id="riskAssessmentContent"></p>
+</div>
+
+<div id="methodologySection" class="result-section" style="display: none;">
+    <h2>Methodology Recommendation</h2>
+    <p id="methodologyContent"></p>
+</div>
+
+<div id="estimationSection" class="result-section" style="display: none;">
+    <h2>Estimation Accuracy and Complexity Assessment</h2>
+    <p id="estimationContent"></p>
+</div>
+
+<!-- Buttons -->
+<button id="generateChartsButton" class="btn btn-custom" style="display: none;">Generate Productivity Charts</button>
+<button id="viewAnalysesButton" class="btn btn-custom" style="display: none;">View Analyses</button>
+<button id="comprehensiveAnalysisButton" class="btn btn-custom" style="display: none;">Comprehensive Analysis</button>
+
+
+<!-- Loading Spinner -->
+<div id="loadingSpinner" style="display: none;">
+    <img src="/static/images/spinner.gif" alt="Loading..." class="spinner">
+</div>
+
+<!-- Charts Container -->
+<div class="chart-container" id="chartsSection" style="display: none;">
+    <div class="chart-wrapper">
+        <h2>Agile Productivity</h2>
+        <canvas id="agileChart"></canvas>
+        <small class="form-text text-muted">This chart represents the Agile productivity metrics over time points.</small>
+    </div>
+    <div class="chart-wrapper">
+        <h2>Waterfall Productivity</h2>
+        <canvas id="waterfallChart"></canvas>
+        <small class="form-text text-muted">This chart represents the Waterfall productivity metrics over time points.</small>
+    </div>
+</div>
+
+<script>
+    document.getElementById('generateChartsButton').addEventListener('click', () => {
+        // Show loading spinner during the chart generation process
+        document.getElementById('loadingSpinner').style.display = 'block';
+        generateChartsHandler().finally(() => {
+            document.getElementById('loadingSpinner').style.display = 'none';
+        });
+    });
+</script>
+
+{% endblock %}
+<!-- templates/maintenance.html -->
+{% extends "base.html" %}
+
+{% block title %}Maintenance Stage{% endblock %}
+
+{% block content %}
+<h1>Maintenance Stage</h1>
+<div class="content-wrapper">
+    <p class="lead">
+        The maintenance stage ensures the product remains functional and relevant after deployment. This involves updating the software to fix bugs, improve performance, and add new features based on user feedback. Regular maintenance helps in prolonging the product's lifecycle and adapting to changing requirements or technologies.
+    </p>
+    <!-- Buttons -->
+    <button id="generateMaintenanceButton" class="btn btn-custom">Generate Maintenance Plan</button>
+</div>
+<div class="content-wrapper">
+    <h2>{{ stage }} Process Description</h2>
+    <div class="content">
+        <pre id="maintenance_content">{{ content }}</pre>
+    </div>
+</div>
+{% endblock %}
+<!-- templates/methodology.html -->
+{% extends "base.html" %}
+
+{% block title %}Methodology Recommendation{% endblock %}
+
+{% block content %}
+<h1>Methodology Recommendation</h1>
+<div class="content-wrapper">
+    <p class="lead">
+        Based on your project description, the following methodology is recommended.
+    </p>
+    <div class="content">
+        <pre id="methodologyRecommendationContent">{{ recommendation_details }}</pre>
+    </div>
+    <!-- Button to proceed -->
+    <a href="/design?description={{ cleaned_description | urlencode }}" class="btn btn-custom">Proceed to Design Stage</a>
+</div>
+{% endblock %}
+
+<!-- templates/navbar.html -->
+<nav class="navbar navbar-expand-lg navbar-custom">
+    <a class="navbar-brand" href="/">Project Management App</a>
+    <button class="navbar-toggler" type="button" data-toggle="collapse"
+            data-target="#navbarNav" aria-controls="navbarNav" aria-expanded="false"
+            aria-label="Toggle navigation">
+        <span class="navbar-toggler-icon" style="color: white;">☰</span>
+    </button>
+    <div class="collapse navbar-collapse" id="navbarNav">
+        <ul class="navbar-nav ml-auto" id="nav-links">
+            <!-- Navigation items -->
+            <li class="nav-item">
+                <a class="nav-link" href="/design">Design</a>
+            </li>
+            <li class="nav-item">
+                <a class="nav-link" href="/prototyping">Prototyping</a>
+            </li>
+            <li class="nav-item">
+                <a class="nav-link" href="/customer_evaluation">Customer Evaluation</a>
+            </li>
+            <li class="nav-item">
+                <a class="nav-link" href="/review_and_update">Review & Update</a>
+            </li>
+            <li class="nav-item">
+                <a class="nav-link" href="/development">Development</a>
+            </li>
+            <li class="nav-item">
+                <a class="nav-link" href="/testing">Testing</a>
+            </li>
+            <li class="nav-item">
+                <a class="nav-link" href="/maintenance">Maintenance</a>
+            </li>
+        </ul>
+    </div>
+</nav>
+
+<!-- templates/prototyping.html -->
+{% extends "base.html" %}
+
+{% block title %}Prototyping Stage{% endblock %}
+
+{% block content %}
+<h1>Prototyping Stage</h1>
+<div class="content-wrapper">
+    <p class="lead">
+        The prototyping stage involves creating a preliminary version of the product to explore ideas and gather feedback. Prototypes help in visualizing how the final product will look and function, allowing stakeholders to understand and evaluate the proposed features and designs. This stage is crucial for identifying potential issues and making adjustments before investing significant resources into development.
+    </p>
+    <!-- Buttons -->
+    <button id="generatePrototypingButton" class="btn btn-custom">Generate Prototyping Plan</button>
+    <a href="/customer_evaluation?description={{ cleaned_description | urlencode }}" class="btn btn-custom">Next Stage: Customer Evaluation</a>
+</div>
+<div class="content-wrapper">
+    <h2>{{ stage }} Process Description</h2>
+    <div class="content">
+        <pre id="prototyping_content">{{ content }}</pre>
+    </div>
+</div>
+{% endblock %}
+<!-- templates/review_and_update.html -->
+{% extends "base.html" %}
+
+{% block title %}Review & Update Stage{% endblock %}
+
+{% block content %}
+<h1>Review & Update Stage</h1>
+<div class="content-wrapper">
+    <p class="lead">
+        The review and update stage focuses on analyzing feedback from testing and customer evaluations to make necessary improvements. This iterative process ensures that the product evolves to better meet user expectations and resolves any issues identified during previous stages.
+    </p>
+    <!-- Buttons -->
+    <button id="generateReviewUpdateButton" class="btn btn-custom">Generate Review & Update Plan</button>
+    <a href="/development?description={{ cleaned_description | urlencode }}" class="btn btn-custom">Next Stage: Development</a>
+</div>
+<div class="content-wrapper">
+    <h2>{{ stage }} Process Description</h2>
+    <div class="content">
+        <pre id="review_update_content">{{ content }}</pre>
+    </div>
+</div>
+{% endblock %}
+<!-- templates/risk_assessment.html -->
+{% extends "base.html" %}
+
+{% block title %}Risk Assessment{% endblock %}
+
+{% block content %}
+<h1>Risk Assessment</h1>
+<div class="content-wrapper">
+    <p class="lead">
+        The following is the risk assessment based on your project description.
+    </p>
+    <div class="content">
+        <pre id="riskAssessmentContent">{{ assessment }}</pre>
+    </div>
+    <!-- Buttons to navigate to other risk-related pages -->
+    <a href="/identified_risks?description={{ cleaned_description | urlencode }}" class="btn btn-custom">Identified Risks</a>
+    <a href="/risk_mitigation?description={{ cleaned_description | urlencode }}" class="btn btn-custom">Risk Mitigation</a>
+</div>
+{% endblock %}
+<!-- templates/risk_mitigation.html -->
+{% extends "base.html" %}
+
+{% block title %}Risk Mitigation Strategies{% endblock %}
+
+{% block content %}
+<h1>Risk Mitigation Strategies</h1>
+<div class="content-wrapper">
+    <p class="lead">
+        Below are the recommended risk mitigation strategies for your project.
+    </p>
+    <div class="content">
+        <pre id="riskMitigationContent">{{ mitigation_strategies }}</pre>
+    </div>
+    <!-- Buttons to navigate to other risk-related pages -->
+    <a href="/identified_risks?description={{ cleaned_description | urlencode }}" class="btn btn-custom">Identified Risks</a>
+    <a href="/risk_assessment?description={{ cleaned_description | urlencode }}" class="btn btn-custom">Risk Assessment</a>
+</div>
+{% endblock %}
+<!-- templates/stage.html -->
+{% extends "base.html" %}
+
+{% block title %}{{ stage }} Stage{% endblock %}
+
+{% block content %}
+<h1>{{ stage }} Stage</h1>
+<div class="content-wrapper">
+    <p class="lead">
+        {{ lead_paragraph }}
+    </p>
+    <!-- Buttons -->
+    <button id="generateContentButton" class="btn btn-custom">Generate {{ stage }} Plan</button>
+    {% if next_stage_url %}
+        <a href="{{ next_stage_url }}?description={{ cleaned_description | urlencode }}" class="btn btn-custom">Next Stage: {{ next_stage_name }}</a>
+    {% endif %}
+</div>
+<div class="content-wrapper">
+    <h2>{{ stage }} Process Description</h2>
+    <div class="content">
+        <pre id="stage_content">{{ content }}</pre>
+    </div>
+</div>
+{% endblock %}
+<!-- templates/test_prototype.html -->
+{% extends "base.html" %}
+
+{% block title %}Test Prototype{% endblock %}
+
+{% block content %}
+<h1>Test Prototype</h1>
+<div class="card">
+    <div class="card-header">Test Your Prototype</div>
+    <div class="card-body">
+        <form id="test-form">
+            <div class="form-group">
+                <label for="test_description">Test Description:</label>
+                <textarea class="form-control" id="test_description" name="test_description" rows="5" required></textarea>
+            </div>
+            <button type="button" class="btn btn-custom" id="testButton">Test Prototype</button>
+        </form>
+        <div id="testResultSection" style="display: none;">
+            <h2>Test Results:</h2>
+            <pre id="test_results"></pre>
+        </div>
+    </div>
+</div>
+{% endblock %}
+<!-- templates/testing.html -->
+{% extends "base.html" %}
+
+{% block title %}Testing Stage{% endblock %}
+
+{% block content %}
+<h1>Testing Stage</h1>
+<div class="content-wrapper">
+    <p class="lead">
+        The testing stage is critical for ensuring that the product meets quality standards and functions as intended. This phase involves various types of testing, such as unit testing, integration testing, system testing, and user acceptance testing. The goal is to identify and fix defects, improve performance, and validate that the product satisfies the requirements.
+    </p>
+    <!-- Buttons -->
+    <button id="generateTestingButton" class="btn btn-custom">Generate Testing Plan</button>
+    <a href="/maintenance?description={{ cleaned_description | urlencode }}" class="btn btn-custom">Next Stage: Maintenance</a>
+</div>
+<div class="content-wrapper">
+    <h2>{{ stage }} Process Description</h2>
+    <div class="content">
+        <pre id="testing_content">{{ content }}</pre>
+    </div>
+</div>
+{% endblock %}
+
+
+
+
+
+
+
+
+
+
+
+

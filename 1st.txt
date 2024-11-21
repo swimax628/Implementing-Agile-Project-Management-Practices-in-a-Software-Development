@@ -1,0 +1,2603 @@
+from fastapi import FastAPI, HTTPException, Request, Query
+from fastapi.responses import JSONResponse, HTMLResponse
+from pydantic import BaseModel
+from typing import List, Optional
+from fastapi.templating import Jinja2Templates
+import requests
+import os
+import logging
+from dotenv import load_dotenv
+import re
+
+app = FastAPI()
+
+# Load environment variables
+load_dotenv(dotenv_path="storekey.env")
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+if not OPENAI_API_KEY:
+    raise RuntimeError("OpenAI API key is missing. Please set the OPENAI_API_KEY environment variable.")
+
+OPENAI_API_URL = "https://api.openai.com/v1/chat/completions"
+
+# Setup logging
+logging.basicConfig(level=logging.DEBUG)
+
+# Setup Jinja2 templates
+templates = Jinja2Templates(directory="templates")
+
+# Define Pydantic models
+class ProjectData(BaseModel):
+    description: str
+
+class RiskAnalysisData(BaseModel):
+    descriptions: List[str]
+    human_risks: List[List[str]]
+
+# Helper function to call OpenAI API
+def call_openai_api(prompt: str, system_prompt: Optional[str] = None):
+    headers = {
+        "Authorization": f"Bearer {OPENAI_API_KEY}",
+        "Content-Type": "application/json",
+    }
+    messages = []
+    if system_prompt:
+        messages.append({"role": "system", "content": system_prompt})
+    messages.append({"role": "user", "content": prompt})
+
+    data = {
+        "model": "gpt-3.5-turbo",  # You can change this to "gpt-4" if you have access and prefer
+        "messages": messages,
+        "max_tokens": 1000,
+        "temperature": 0,  # Set temperature to 0 for deterministic output
+    }
+    response = requests.post(OPENAI_API_URL, headers=headers, json=data)
+    logging.debug(f"Response Status Code: {response.status_code}")
+    logging.debug(f"Response Text: {response.text}")
+
+    if response.status_code != 200:
+        raise HTTPException(status_code=response.status_code, detail="Error calling OpenAI API")
+
+    return response.json()['choices'][0]['message']['content'].strip()
+
+# Helper function to parse response
+def parse_response(response: str, agile_label: str = "Agile:", waterfall_label: str = "Waterfall:"):
+    lines = response.split('\n')
+    agile_values, waterfall_values = [], []
+    current_section = None
+
+    for line in lines:
+        line = line.strip()
+        if line == '':
+            continue  # Skip empty lines
+
+        if line.startswith(agile_label):
+            current_section = "Agile"
+            continue
+        elif line.startswith(waterfall_label):
+            current_section = "Waterfall"
+            continue
+
+        if current_section == "Agile":
+            value = extract_number(line)
+            if value is not None:
+                agile_values.append(value)
+            else:
+                logging.warning(f"No numeric value found in line '{line}' for Agile.")
+        elif current_section == "Waterfall":
+            value = extract_number(line)
+            if value is not None:
+                waterfall_values.append(value)
+            else:
+                logging.warning(f"No numeric value found in line '{line}' for Waterfall.")
+
+    return agile_values, waterfall_values
+
+def extract_number(text: str):
+    match = re.search(r'[-+]?\d*\.\d+|\d+', text)
+    if match:
+        try:
+            return float(match.group())
+        except ValueError:
+            return None
+    return None
+
+# Routes
+@app.post("/identify_risks/")
+async def identify_risks(project: ProjectData):
+    try:
+        prompt = f"Identify potential risks in the following project description:\n\n{project.description}\n\nRisks:"
+        risks = call_openai_api(prompt)
+        prompt_assessment = f"Assess the likelihood and impact of the following risks:\n\n{risks}\n\nAssessment:"
+        assessment = call_openai_api(prompt_assessment)
+        return {"risks": risks.split('\n'), "assessment": assessment}
+    except Exception as e:
+        logging.error(f"Error in /identify_risks/: {e}")
+        raise HTTPException(status_code=500, detail="An error occurred while identifying risks.")
+
+@app.post("/mitigate_risks/")
+async def mitigate_risks(project: ProjectData):
+    try:
+        prompt = f"Provide risk mitigation strategies for the following project description in the context of Agile project management:\n\n{project.description}\n\nMitigation Strategies:"
+        mitigation = call_openai_api(prompt)
+        return {"mitigation": mitigation}
+    except Exception as e:
+        logging.error(f"Error in /mitigate_risks/: {e}")
+        raise HTTPException(status_code=500, detail="An error occurred while generating mitigation strategies.")
+
+@app.post("/clean_description/")
+async def clean_description(project: ProjectData):
+    try:
+        prompt = f"Clean the following project description to improve clarity and conciseness:\n\n{project.description}\n\nCleaned Description:"
+        cleaned_description = call_openai_api(prompt)
+        return {"cleaned_description": cleaned_description}
+    except Exception as e:
+        logging.error(f"Error in /clean_description/: {e}")
+        raise HTTPException(status_code=500, detail="An error occurred while cleaning the description.")
+
+@app.post("/analyze_risks/")
+async def analyze_risks(data: RiskAnalysisData):
+    try:
+        # Ensure both lists have the same length
+        if len(data.descriptions) != len(data.human_risks):
+            raise ValueError("Mismatch between number of descriptions and number of risk lists.")
+
+        results = []
+        for desc, risks in zip(data.descriptions, data.human_risks):
+            predicted_risks = call_openai_api(f"Identify potential risks in the following project description:\n\n{desc}\n\nRisks:")
+            results.append({
+                "description": desc,
+                "human_risks": risks,
+                "predicted_risks": predicted_risks.split('\n')
+            })
+
+        return {"results": results}
+    except ValueError as ve:
+        logging.error(f"ValueError in /analyze_risks/: {ve}")
+        raise HTTPException(status_code=400, detail=str(ve))
+    except Exception as e:
+        logging.error(f"Error in /analyze_risks/: {e}")
+        raise HTTPException(status_code=500, detail="An error occurred while analyzing risks.")
+
+@app.post("/generate_productivity/")
+async def generate_productivity(project: ProjectData):
+    prompt = f"""
+Read the following project description and determine 5 float productivity values for Agile and 5 float productivity values for Waterfall at 5 different time points during the development duration of the given project.
+
+Important: You must **only** output the numerical values without any numbering, bullet points, explanations, or additional text. Do not include any introductory or concluding remarks.
+
+Format the response exactly as follows:
+
+Agile:
+value1
+value2
+value3
+value4
+value5
+
+Waterfall:
+value1
+value2
+value3
+value4
+value5
+"""
+    system_prompt = "You are an assistant that strictly outputs numerical values as instructed, without any additional text."
+    try:
+        content = call_openai_api(prompt, system_prompt=system_prompt)
+        agile_productivity, waterfall_productivity = parse_response(content)
+        return {
+            "agile_productivity": agile_productivity,
+            "waterfall_productivity": waterfall_productivity
+        }
+    except Exception as e:
+        logging.error(f"Error in /generate_productivity/: {e}")
+        raise HTTPException(status_code=500, detail="An error occurred while generating productivity values.")
+
+@app.post("/generate_performance/")
+async def generate_performance(project: ProjectData):
+    prompt = f"""
+Read the following project description and determine 5 float performance values for Agile and 5 float performance values for Waterfall which indicate their performance at 5 different time points during the development duration of the given project.
+
+Important: You must **only** output the numerical values without any numbering, bullet points, explanations, or additional text. Do not include any introductory or concluding remarks.
+
+Format the response exactly as follows:
+
+Agile:
+value1
+value2
+value3
+value4
+value5
+
+Waterfall:
+value1
+value2
+value3
+value4
+value5
+"""
+    system_prompt = "You are an assistant that strictly outputs numerical values as instructed, without any additional text."
+    try:
+        content = call_openai_api(prompt, system_prompt=system_prompt)
+        agile_performance, waterfall_performance = parse_response(content)
+        return {
+            "agile_performance": agile_performance,
+            "waterfall_performance": waterfall_performance
+        }
+    except Exception as e:
+        logging.error(f"Error in /generate_performance/: {e}")
+        raise HTTPException(status_code=500, detail="An error occurred while generating performance values.")
+
+@app.post("/generate_mitigation/")
+async def generate_mitigation(project: ProjectData):
+    prompt = f"""
+Read the following project description and determine 5 float risk mitigation values for Agile and 5 float risk mitigation values for Waterfall which indicate their ability to mitigate risks at 5 different time points during the development duration of the given project.
+
+Important: You must **only** output the numerical values without any numbering, bullet points, explanations, or additional text. Do not include any introductory or concluding remarks.
+
+Format the response exactly as follows:
+
+Agile:
+value1
+value2
+value3
+value4
+value5
+
+Waterfall:
+value1
+value2
+value3
+value4
+value5
+"""
+    system_prompt = "You are an assistant that strictly outputs numerical values as instructed, without any additional text."
+    try:
+        content = call_openai_api(prompt, system_prompt=system_prompt)
+        agile_mitigation, waterfall_mitigation = parse_response(content)
+        return {
+            "agile_mitigation": agile_mitigation,
+            "waterfall_mitigation": waterfall_mitigation
+        }
+    except Exception as e:
+        logging.error(f"Error in /generate_mitigation/: {e}")
+        raise HTTPException(status_code=500, detail="An error occurred while generating mitigation values.")
+
+# HTML response routes
+@app.get("/", response_class=HTMLResponse)
+async def home(request: Request):
+    return templates.TemplateResponse("index.html", {"request": request})
+
+@app.get("/design_page", response_class=HTMLResponse)
+async def design_page(request: Request, description: Optional[str] = None):
+    return templates.TemplateResponse("design.html", {"request": request, "stage": "", "content": "", "cleaned_description": description or ""})
+
+@app.post("/generate_design/")
+async def generate_design(project: ProjectData):
+    try:
+        prompt = f"Generate a detailed plan of the design stage for the given project description if we implement Agile project management and compare it with the Waterfall model:\n\n{project.description}\n\nDesign:"
+        content = call_openai_api(prompt)
+        return {"design_content": content}
+    except Exception as e:
+        logging.error(f"Error in /generate_design/: {e}")
+        raise HTTPException(status_code=500, detail="An error occurred while generating the design.")
+
+@app.get("/prototyping", response_class=HTMLResponse)
+async def prototyping(request: Request, description: str = Query(...)):
+    prompt = f"Generate a detailed plan for the prototyping stage of an Agile project for the given project description and compare it with prototyping in the Waterfall model, if any.\n\n{description}\n\nPrototyping:"
+    content = call_openai_api(prompt)
+    return templates.TemplateResponse("prototyping.html", {"request": request, "stage": "Prototyping", "content": content, "cleaned_description": description})
+
+@app.get("/customer_evaluation", response_class=HTMLResponse)
+async def customer_evaluation(request: Request, description: str = Query(...)):
+    prompt = f"Generate a detailed plan for the customer evaluation stage of an Agile project for the given project description and compare it with the evaluation phase in the Waterfall model, if any.\n\n{description}\n\nCustomer Evaluation:"
+    content = call_openai_api(prompt)
+    return templates.TemplateResponse("customer_evaluation.html", {"request": request, "stage": "Customer Evaluation", "content": content, "cleaned_description": description})
+
+@app.get("/review_and_update", response_class=HTMLResponse)
+async def review_and_update(request: Request, description: str = Query(...)):
+    prompt = f"Generate a detailed plan for the review and update stage of an Agile project for the given project description and compare it with the update stage in the Waterfall model, if any.\n\n{description}\n\nReview and Update:"
+    content = call_openai_api(prompt)
+    return templates.TemplateResponse("review_and_update.html", {"request": request, "stage": "Review and Update", "content": content, "cleaned_description": description})
+
+@app.get("/development", response_class=HTMLResponse)
+async def development(request: Request, description: str = Query(...)):
+    prompt = f"Generate a detailed plan for the development stage of an Agile project for the given project description and compare it with development in the Waterfall model.\n\n{description}\n\nDevelopment:"
+    content = call_openai_api(prompt)
+    return templates.TemplateResponse("development.html", {"request": request, "stage": "Development", "content": content, "cleaned_description": description})
+
+@app.get("/testing", response_class=HTMLResponse)
+async def testing(request: Request, description: str = Query(...)):
+    prompt = f"Generate a detailed plan for the testing stage of an Agile project for the given project description and compare it with testing in the Waterfall model.\n\n{description}\n\nTesting:"
+    content = call_openai_api(prompt)
+    return templates.TemplateResponse("testing.html", {"request": request, "stage": "Testing", "content": content, "cleaned_description": description})
+
+@app.get("/maintenance", response_class=HTMLResponse)
+async def maintenance(request: Request, description: str = Query(...)):
+    prompt = f"Generate a detailed plan for the maintenance stage of an Agile project for the given project description and compare it with maintenance in the Waterfall model.\n\n{description}\n\nMaintenance:"
+    content = call_openai_api(prompt)
+    return templates.TemplateResponse("maintenance.html", {"request": request, "stage": "Maintenance", "content": content, "cleaned_description": description})
+
+@app.get("/recommendation")
+async def recommendation(description: Optional[str] = None):
+    if description:
+        prompt = f"Based on the following project description, recommend whether Agile or Waterfall is more suitable:\n\n{description}"
+        recommendation_content = call_openai_api(prompt)
+    else:
+        recommendation_content = "No description provided."
+
+    return JSONResponse(content={"recommendation": recommendation_content})
+
+# Run the application
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=8000, reload=True)
+*************************************************************************************
+
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Agile vs Waterfall Productivity Comparison</title>
+    <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;700&display=swap" rel="stylesheet">
+    <!-- Specify Chart.js version for compatibility -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@3.9.1"></script>
+    <style>
+        body {
+            background: linear-gradient(to bottom, #e0f7fa, #ffffff);
+            color: #333;
+            font-family: 'Roboto', sans-serif;
+            margin: 0;
+            padding: 0;
+        }
+        .container {
+            max-width: 1200px;
+            margin: 50px auto;
+            padding: 20px;
+            text-align: center;
+        }
+        h1 {
+            font-weight: 700;
+            color: #00796b;
+            font-size: 2.5rem;
+            margin-bottom: 20px;
+        }
+        .chart-container {
+            display: flex;
+            justify-content: space-between;
+            gap: 20px;
+            flex-wrap: wrap;
+            margin-top: 30px;
+        }
+        .chart-wrapper {
+            width: 45%;
+            background-color: white;
+            padding: 20px;
+            border-radius: 12px;
+            box-sizing: border-box;
+            position: relative;
+            height: 400px; /* Set a fixed height for charts */
+        }
+        @media (max-width: 768px) {
+            .chart-wrapper {
+                width: 100%;
+            }
+        }
+        .btn-custom {
+            background-color: #00796b;
+            color: white;
+            border: none;
+            border-radius: 8px;
+            padding: 10px 20px;
+            font-size: 16px;
+            transition: background-color 0.3s ease;
+            text-decoration: none;
+            margin-top: 20px;
+        }
+        .btn-custom:hover {
+            background-color: #004d40;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Agile vs Waterfall Productivity Comparison</h1>
+
+        <!-- Project Description Input -->
+        <div class="card">
+            <div class="card-header">Project Description Cleaning</div>
+            <div class="card-body">
+                <form id="description-form">
+                    <div class="form-group">
+                        <label for="description">Project Description:</label>
+                        <textarea class="form-control" id="description" name="description" rows="5" required></textarea>
+                    </div>
+                    <button type="button" class="btn btn-custom" onclick="submitDescription()">Submit</button>
+                </form>
+                <div id="cleaned-result" class="mt-3"></div>
+            </div>
+        </div>
+
+        <!-- Generate Chart Button -->
+        <button id="generateChartsButton" class="btn btn-custom" style="display: none;">Generate Charts</button>
+
+        <!-- Charts Container -->
+        <div class="chart-container" id="chartsSection" style="display: none;">
+            <div class="chart-wrapper">
+                <h2>Agile Productivity</h2>
+                <canvas id="agileChart"></canvas>
+            </div>
+            <div class="chart-wrapper">
+                <h2>Waterfall Productivity</h2>
+                <canvas id="waterfallChart"></canvas>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let cleanedDescription = '';
+
+        async function submitDescription() {
+            const description = document.getElementById('description').value.trim();
+            if (!description) {
+                alert('Please enter a project description.');
+                return;
+            }
+
+            try {
+                const response = await fetch('/clean_description/', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ description: description })
+                });
+                if (!response.ok) throw new Error("Network response was not ok");
+                const data = await response.json();
+                cleanedDescription = data.cleaned_description;
+                document.getElementById('cleaned-result').innerText = cleanedDescription;
+                document.getElementById('generateChartsButton').style.display = 'inline-block';
+            } catch (error) {
+                console.error("Error cleaning description:", error);
+                alert("Failed to clean description. Please check your API or network connection.");
+            }
+        }
+
+        function checkCleanedDescription() {
+            if (!cleanedDescription) {
+                alert('Cleaned description is not available. Please clean the description first.');
+                return false;
+            }
+            return true;
+        }
+
+        document.getElementById('generateChartsButton').addEventListener('click', async () => {
+            if (!checkCleanedDescription()) return;
+
+            try {
+                const response = await fetch('/generate_productivity/', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ description: cleanedDescription })
+                });
+                if (!response.ok) throw new Error("Network response was not ok");
+                const data = await response.json();
+
+                console.log('Received data:', data); // Debugging statement
+
+                const agileData = data.agile_productivity;
+                const waterfallData = data.waterfall_productivity;
+
+                // Validate data
+                if (!Array.isArray(agileData) || !Array.isArray(waterfallData)) {
+                    throw new Error("Invalid data format received from the server.");
+                }
+
+                // Generate charts
+                generateCharts(agileData, waterfallData);
+                document.getElementById('chartsSection').style.display = 'flex';
+            } catch (error) {
+                console.error("Error fetching data:", error);
+                alert("Failed to fetch data. Please check your API or network connection.");
+            }
+        });
+
+        function generateCharts(agileValues, waterfallValues) {
+            // Labels for the charts
+            const labels = ['Point 1', 'Point 2', 'Point 3', 'Point 4', 'Point 5'];
+
+            // Agile Productivity Chart Data
+            const agileChartData = {
+                labels: labels,
+                datasets: [{
+                    label: 'Agile Productivity',
+                    data: agileValues,
+                    backgroundColor: 'rgba(75, 192, 192, 0.6)',
+                    borderColor: 'rgba(75, 192, 192, 1)',
+                    borderWidth: 2
+                }]
+            };
+
+            // Waterfall Productivity Chart Data
+            const waterfallChartData = {
+                labels: labels,
+                datasets: [{
+                    label: 'Waterfall Productivity',
+                    data: waterfallValues,
+                    backgroundColor: 'rgba(255, 99, 132, 0.6)',
+                    borderColor: 'rgba(255, 99, 132, 1)',
+                    borderWidth: 2
+                }]
+            };
+
+            // Configuration for Agile Chart
+            const configAgile = {
+                type: 'bar',
+                data: agileChartData,
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    scales: {
+                        y: {
+                            beginAtZero: true,
+                            title: {
+                                display: true,
+                                text: 'Productivity'
+                            }
+                        },
+                        x: {
+                            title: {
+                                display: true,
+                                text: 'Time Points'
+                            }
+                        }
+                    },
+                    plugins: {
+                        legend: {
+                            display: true,
+                            position: 'top'
+                        }
+                    }
+                }
+            };
+
+            // Configuration for Waterfall Chart
+            const configWaterfall = {
+                type: 'bar',
+                data: waterfallChartData,
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    scales: {
+                        y: {
+                            beginAtZero: true,
+                            title: {
+                                display: true,
+                                text: 'Productivity'
+                            }
+                        },
+                        x: {
+                            title: {
+                                display: true,
+                                text: 'Time Points'
+                            }
+                        }
+                    },
+                    plugins: {
+                        legend: {
+                            display: true,
+                            position: 'top'
+                        }
+                    }
+                };
+            };
+
+            // Destroy existing charts if they exist
+            if (window.agileChartInstance) {
+                window.agileChartInstance.destroy();
+            }
+            if (window.waterfallChartInstance) {
+                window.waterfallChartInstance.destroy();
+            }
+
+            // Render Agile Chart
+            const agileCtx = document.getElementById('agileChart').getContext('2d');
+            window.agileChartInstance = new Chart(agileCtx, configAgile);
+
+            // Render Waterfall Chart
+            const waterfallCtx = document.getElementById('waterfallChart').getContext('2d');
+            window.waterfallChartInstance = new Chart(waterfallCtx, configWaterfall);
+        }
+    </script>
+</body>
+</html>
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Clean Project Description</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <!-- Include Google Fonts and Bootstrap for consistent styling -->
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;700&display=swap">
+    <!-- Bootstrap CSS (Optional, if you used it in index.html) -->
+    <link rel="stylesheet" href="https://maxcdn.bootstrapcdn.com/bootstrap/4.5.2/css/bootstrap.min.css">
+
+    <style>
+        body {
+            background: linear-gradient(to bottom, #e0f7fa, #ffffff);
+            color: #333;
+            font-family: 'Roboto', sans-serif;
+            margin: 0;
+            padding: 0;
+        }
+        .container {
+            max-width: 800px;
+            margin: 50px auto;
+            padding: 20px;
+            text-align: center;
+        }
+        h1 {
+            font-weight: 700;
+            color: #00796b;
+            font-size: 2.5rem;
+            margin-bottom: 20px;
+        }
+        h2 {
+            font-weight: 700;
+            color: #00796b;
+            font-size: 1.8rem;
+            margin-top: 30px;
+            margin-bottom: 20px;
+        }
+        form {
+            margin-bottom: 30px;
+            background-color: white;
+            padding: 20px;
+            border-radius: 12px;
+        }
+        label {
+            display: block;
+            font-size: 1.2rem;
+            color: #00796b;
+            margin-bottom: 10px;
+            text-align: left;
+        }
+        textarea {
+            width: 100%;
+            padding: 10px;
+            border-radius: 8px;
+            border: 1px solid #ddd;
+            font-family: 'Roboto', sans-serif;
+            font-size: 1rem;
+            resize: vertical;
+        }
+        .btn-custom {
+            background-color: #00796b;
+            color: white;
+            border: none;
+            border-radius: 8px;
+            padding: 10px 20px;
+            font-size: 16px;
+            cursor: pointer;
+            transition: background-color 0.3s ease;
+            margin-top: 10px;
+            text-decoration: none;
+        }
+        .btn-custom:hover {
+            background-color: #004d40;
+        }
+        pre {
+            background-color: #f6f8fa;
+            padding: 15px;
+            border-radius: 8px;
+            border: 1px solid #ddd;
+            text-align: left;
+            font-family: 'Courier New', monospace;
+            overflow-x: auto;
+            white-space: pre-wrap;
+            color: #333;
+        }
+        .card {
+            border: none;
+            border-radius: 12px;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+            margin-bottom: 20px;
+            background-color: white;
+            padding: 20px;
+            text-align: left;
+        }
+        .card-header {
+            background-color: #00796b;
+            color: white;
+            font-size: 1.5rem;
+            font-weight: 700;
+            border-top-left-radius: 12px;
+            border-top-right-radius: 12px;
+            padding: 15px;
+            margin: -20px -20px 20px -20px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Clean Project Description</h1>
+
+        <!-- Project Description Cleaning Card -->
+        <div class="card">
+            <div class="card-header">Project Description Cleaning</div>
+            <div class="card-body">
+                <form id="clean-form">
+                    <label for="description">Project Description:</label>
+                    <textarea id="description" name="description" rows="10" required></textarea>
+                    <button type="button" class="btn btn-custom" onclick="submitForm()">Submit</button>
+                </form>
+                <h2>Cleaned Description:</h2>
+                <pre id="cleaned_description"></pre>
+                <button onclick="navigateToHome()" class="btn btn-custom">Home</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Prevent form submission on Enter key press
+        document.getElementById('clean-form').addEventListener('submit', function(event) {
+            event.preventDefault();
+        });
+
+        async function submitForm() {
+            const description = document.getElementById('description').value.trim();
+            if (!description) {
+                alert('Please enter a project description.');
+                return;
+            }
+
+            try {
+                const response = await fetch('/clean_description/', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ description: description })
+                });
+                if (!response.ok) throw new Error('Network response was not ok');
+                const data = await response.json();
+                document.getElementById('cleaned_description').innerText = data.cleaned_description;
+            } catch (error) {
+                console.error('Error:', error);
+                document.getElementById('cleaned_description').innerText = 'An error occurred while cleaning the description. Please try again later.';
+            }
+        }
+
+        function navigateToHome() {
+            window.location.href = '/';
+        }
+    </script>
+</body>
+</html>
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Customer Evaluation Stage</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+    <!-- Bootstrap CSS -->
+    <link href="https://maxcdn.bootstrapcdn.com/bootstrap/4.5.2/css/bootstrap.min.css" rel="stylesheet">
+
+    <!-- Google Font -->
+    <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;700&display=swap" rel="stylesheet">
+
+    <style>
+        body {
+            background: linear-gradient(to bottom, #e0f7fa, #ffffff);
+            color: #333;
+            font-family: 'Roboto', sans-serif;
+            margin: 0;
+            padding: 0;
+        }
+        .container {
+            max-width: 1200px;
+            margin: 30px auto;
+            padding: 20px;
+            text-align: center;
+        }
+        h1 {
+            font-weight: 700;
+            color: #00796b;
+            font-size: 2.5rem;
+            margin-bottom: 20px;
+        }
+        h2 {
+            font-weight: 700;
+            color: #00796b;
+            font-size: 1.8rem;
+            margin-top: 40px;
+            margin-bottom: 20px;
+        }
+        .lead {
+            font-size: 1.1rem;
+            color: #555;
+            margin-bottom: 20px;
+            text-align: justify;
+        }
+        .btn-custom {
+            background-color: #00796b;
+            color: white;
+            border: none;
+            border-radius: 8px;
+            padding: 10px 30px;
+            font-size: 16px;
+            transition: background-color 0.3s ease;
+            text-decoration: none;
+            margin-top: 30px;
+            display: inline-block;
+        }
+        .btn-custom:hover {
+            background-color: #004d40;
+            color: white;
+        }
+        .content-wrapper {
+            max-width: 1000px;
+            margin: 0 auto;
+            text-align: left;
+        }
+        .content {
+            font-size: 1rem;
+            color: #333;
+            background-color: white;
+            border-radius: 12px;
+            padding: 30px;
+            margin-top: 20px;
+            margin-bottom: 40px;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+        }
+        pre {
+            background-color: #f6f8fa;
+            padding: 20px;
+            border-radius: 8px;
+            border: 1px solid #ddd;
+            font-family: 'Courier New', monospace;
+            overflow-x: auto;
+            white-space: pre-wrap;
+            margin: 0;
+            color: #333;
+        }
+        .section-header {
+            margin-top: 40px;
+            text-align: center;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Customer Evaluation Stage</h1>
+        <p class="lead">
+            The evaluation stage involves assessing the product to ensure it meets the desired goals and quality standards. This stage includes conducting various tests—such as unit, integration, and user acceptance tests—to verify that the product functions correctly and fulfills user requirements. Feedback is gathered from stakeholders and users to identify areas for improvement and confirm that the product meets their needs. Performance metrics and analytics are reviewed to evaluate how well the product performs under real-world conditions and to ensure it meets key success criteria. Additionally, any issues or gaps are identified and addressed to refine the product before or during its release. The evaluation stage is iterative, with ongoing assessments and adjustments based on feedback and performance data to ensure alignment with project goals and user expectations.
+        </p>
+
+        <!-- Next Step Button -->
+        <a href="/review_and_update?description={{ cleaned_description }}" class="btn btn-custom">Next Step: Review and Update</a>
+
+        <!-- Additional Content -->
+        <div class="content-wrapper">
+            <h2>{{ stage }} Process Description</h2>
+            <div class="content">
+                <pre>{{ content }}</pre>
+            </div>
+        </div>
+    </div>
+
+    <!-- Bootstrap JS and dependencies -->
+    <!-- Ensure versions are compatible with Bootstrap 4.5.2 -->
+    <script src="https://code.jquery.com/jquery-3.5.1.slim.min.js"></script>
+    <!-- Proper Popper.js version for Bootstrap 4 -->
+    <script src="https://cdn.jsdelivr.net/npm/popper.js@1.16.1/dist/umd/popper.min.js"></script>
+    <script src="https://maxcdn.bootstrapcdn.com/bootstrap/4.5.2/js/bootstrap.min.js"></script>
+</body>
+</html>
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Data Cleaning Methodology</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+    <!-- Google Font -->
+    <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;700&display=swap" rel="stylesheet">
+    <!-- Include Bootstrap CSS (if used in index.html) -->
+    <link href="https://maxcdn.bootstrapcdn.com/bootstrap/4.5.2/css/bootstrap.min.css" rel="stylesheet">
+
+    <style>
+        body {
+            background: linear-gradient(to bottom, #e0f7fa, #ffffff);
+            color: #333;
+            font-family: 'Roboto', sans-serif;
+            padding: 0;
+            margin: 0;
+        }
+        .container {
+            max-width: 1000px;
+            margin: 50px auto;
+            padding: 20px;
+            text-align: center;
+        }
+        h1 {
+            color: #00796b;
+            font-weight: 700;
+            font-size: 2.5rem;
+            margin-bottom: 20px;
+        }
+        h2 {
+            color: #00796b;
+            font-weight: 700;
+            font-size: 1.8rem;
+            margin-top: 30px;
+            margin-bottom: 20px;
+        }
+        p, ol, ul {
+            text-align: left;
+            color: #555;
+            font-size: 1rem;
+            margin-bottom: 15px;
+        }
+        ol, ul {
+            padding-left: 20px;
+        }
+        li {
+            margin-bottom: 10px;
+        }
+        a {
+            text-decoration: none;
+            color: #00796b;
+        }
+        a:hover {
+            text-decoration: underline;
+            color: #004d40;
+        }
+        .btn-custom {
+            background-color: #00796b;
+            color: white;
+            border: none;
+            border-radius: 8px;
+            padding: 10px 30px;
+            font-size: 16px;
+            cursor: pointer;
+            transition: background-color 0.3s ease;
+            margin-top: 30px;
+            text-decoration: none;
+            display: inline-block;
+        }
+        .btn-custom:hover {
+            background-color: #004d40;
+            color: white;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Data Cleaning Methodology</h1>
+        <p>Data cleaning is a crucial step in preparing data for analysis by LLMs, enhancing the quality of the information used in risk identification and assessment.</p>
+
+        <h2>Steps in Data Cleaning:</h2>
+        <ol>
+            <li><strong>Introduction:</strong>
+                <ul>
+                    <li>Clean the data by removing any unwanted information.</li>
+                    <li>Perform feature selection to retain only relevant features.</li>
+                    <li>Impute missing data appropriately to ensure completeness.</li>
+                    <li>Engage in feature scaling to maintain consistency across features.</li>
+                </ul>
+            </li>
+            <li><strong>Preprocessing:</strong> We will ensure that the data fed into LLMs is of good quality by:
+                <ul>
+                    <li>Engaging in various preprocessing techniques.</li>
+                    <li>Validating the quality of the data continuously throughout the process.</li>
+                </ul>
+            </li>
+        </ol>
+
+        <!-- Updated button for consistency -->
+        <a href="/" class="btn btn-custom">Go Back to Home</a>
+    </div>
+
+    <!-- Include Bootstrap JS and dependencies (if used in index.html) -->
+    <!-- Make sure to include these if Bootstrap components are used in the page -->
+    <script src="https://code.jquery.com/jquery-3.5.1.slim.min.js"></script>
+    <!-- Proper Popper.js version for Bootstrap 4 -->
+    <script src="https://cdn.jsdelivr.net/npm/popper.js@1.16.1/dist/umd/popper.min.js"></script>
+    <script src="https://maxcdn.bootstrapcdn.com/bootstrap/4.5.2/js/bootstrap.min.js"></script>
+</body>
+</html>
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Design Stage</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <!-- Bootstrap CSS -->
+    <link rel="stylesheet" href="https://maxcdn.bootstrapcdn.com/bootstrap/4.5.2/css/bootstrap.min.css">
+    <!-- Google Font -->
+    <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;700&display=swap" rel="stylesheet">
+    <style>
+        body {
+            background: linear-gradient(to bottom, #e0f7fa, #ffffff);
+            color: #333;
+            font-family: 'Roboto', sans-serif;
+            margin: 0;
+            padding: 0;
+        }
+        .container {
+            max-width: 1200px;
+            margin: 50px auto;
+            padding: 20px;
+            text-align: center;
+        }
+        h1 {
+            font-weight: 700;
+            color: #00796b;
+            font-size: 2.5rem;
+            margin-bottom: 20px;
+        }
+        .content-wrapper {
+            max-width: 1000px;
+            margin: 0 auto;
+            text-align: left;
+        }
+        .lead {
+            font-size: 1.1rem;
+            color: #555;
+            margin-bottom: 20px;
+            text-align: justify;
+        }
+        .btn-custom {
+            background-color: #00796b;
+            color: white;
+            border: none;
+            border-radius: 8px;
+            padding: 10px 30px;
+            font-size: 16px;
+            transition: background-color 0.3s ease;
+            text-decoration: none;
+            margin: 10px 5px;
+            display: inline-block;
+        }
+        .btn-custom:hover {
+            background-color: #004d40;
+        }
+        .content {
+            font-size: 1rem;
+            color: #333;
+            background-color: white;
+            border-radius: 12px;
+            padding: 30px;
+            margin-top: 20px;
+            margin-bottom: 40px;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+        }
+        pre {
+            background-color: #f6f8fa;
+            padding: 20px;
+            border-radius: 8px;
+            border: 1px solid #ddd;
+            font-family: 'Courier New', monospace;
+            overflow-x: auto;
+            white-space: pre-wrap;
+            margin: 0;
+            color: #333;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Design Stage</h1>
+        <div class="content-wrapper">
+            <p class="lead">
+                The design stage is centered on creating a clear blueprint for the product based on user requirements and business objectives. This involves defining user stories, which break down features into smaller, manageable tasks that can be prioritized and developed. Wireframes and prototypes are created to visualize the product's interface and functionality, allowing for feedback and refinement of requirements. Additionally, planning the architecture is crucial to establish the technical structure and components needed to support the product. The design process is iterative, with regular reviews and adjustments to ensure alignment with evolving user needs and business goals.
+            </p>
+            <button id="generateDesignButton" class="btn btn-custom">Generate Design</button>
+            <a href="/prototyping?description={{ cleaned_description | urlencode }}" class="btn btn-custom">Next Stage: Prototyping</a>
+        </div>
+        <div class="content-wrapper">
+            <h2>{{ stage }} Process Description</h2>
+            <div class="content">
+                <pre id="design_content">{{ content }}</pre>
+            </div>
+        </div>
+    </div>
+
+    <!-- Hidden input for storing cleaned description -->
+    <input type="hidden" id="cleaned_description" value="{{ cleaned_description | escape }}">
+
+    <!-- Bootstrap JS and dependencies -->
+    <script src="https://code.jquery.com/jquery-3.5.1.slim.min.js"></script>
+    <!-- Popper.js version compatible with Bootstrap 4 -->
+    <script src="https://cdn.jsdelivr.net/npm/popper.js@1.16.1/dist/umd/popper.min.js"></script>
+    <!-- Bootstrap JS -->
+    <script src="https://maxcdn.bootstrapcdn.com/bootstrap/4.5.2/js/bootstrap.min.js"></script>
+
+    <!-- JavaScript Code -->
+    <script>
+        document.getElementById('generateDesignButton').addEventListener('click', async function() {
+            await generateDesign();
+        });
+
+        async function generateDesign() {
+            const cleanedDescription = document.getElementById('cleaned_description').value;
+
+            if (!cleanedDescription) {
+                alert('Cleaned description is not available.');
+                return;
+            }
+
+            try {
+                const response = await fetch('/generate_design/', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ description: cleanedDescription })
+                });
+                if (!response.ok) throw new Error('Network response was not ok');
+                const data = await response.json();
+                document.getElementById('design_content').innerText = data.design_content;
+            } catch (error) {
+                console.error('Error fetching design content:', error);
+                alert('Failed to generate design. Please check your API or network connection.');
+            }
+        }
+    </script>
+</body>
+</html>
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Development Stage</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <!-- Bootstrap CSS -->
+    <link rel="stylesheet" href="https://maxcdn.bootstrapcdn.com/bootstrap/4.5.2/css/bootstrap.min.css">
+    <!-- Google Font -->
+    <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;700&display=swap" rel="stylesheet">
+    <style>
+        body {
+            background: linear-gradient(to bottom, #e0f7fa, #ffffff);
+            color: #333;
+            font-family: 'Roboto', sans-serif;
+            margin: 0;
+            padding: 0;
+        }
+        .container {
+            max-width: 1200px;
+            margin: 50px auto;
+            padding: 20px;
+            text-align: center;
+        }
+        h1 {
+            font-weight: 700;
+            color: #00796b;
+            font-size: 2.5rem;
+            margin-bottom: 20px;
+        }
+        h2 {
+            font-weight: 700;
+            color: #00796b;
+            font-size: 1.8rem;
+            margin-top: 40px;
+            margin-bottom: 20px;
+        }
+        .lead {
+            font-size: 1.1rem;
+            color: #555;
+            text-align: justify;
+            margin-bottom: 20px;
+        }
+        .btn-custom {
+            background-color: #00796b;
+            color: white;
+            border: none;
+            border-radius: 8px;
+            padding: 10px 30px;
+            font-size: 16px;
+            transition: background-color 0.3s ease;
+            text-decoration: none;
+            margin-top: 30px;
+            display: inline-block;
+        }
+        .btn-custom:hover {
+            background-color: #004d40;
+        }
+        .content-wrapper {
+            max-width: 1000px;
+            margin: 0 auto;
+            text-align: left;
+        }
+        .content {
+            font-size: 1rem;
+            color: #333;
+            background-color: white;
+            border-radius: 12px;
+            padding: 30px;
+            margin-top: 20px;
+            margin-bottom: 40px;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+        }
+        pre {
+            background-color: #f6f8fa;
+            padding: 20px;
+            border-radius: 8px;
+            border: 1px solid #ddd;
+            font-family: 'Courier New', monospace;
+            overflow-x: auto;
+            white-space: pre-wrap;
+            margin: 0;
+            color: #333;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Development Stage</h1>
+        <div class="content-wrapper">
+            <p class="lead">
+                The development stage focuses on building the product incrementally based on the requirements defined during earlier stages. This phase involves taking user stories or tasks from the product backlog and working on them in short, time-boxed iterations or sprints. Development teams write code, create features, and perform tasks according to the agreed-upon priorities and acceptance criteria. Daily stand-up meetings are held to synchronize team efforts, address any blockers, and ensure progress. The development process is iterative, with regular reviews and refinements based on feedback from stakeholders and testing results. This approach allows for flexibility and adaptability, ensuring that the product evolves in alignment with user needs and project goals while maintaining high quality and responsiveness to change.
+            </p>
+            <!-- Next Step Button -->
+            <a href="/testing?description={{ cleaned_description | urlencode }}" class="btn btn-custom">Next Step: Testing</a>
+        </div>
+
+        <!-- Additional Content -->
+        <div class="content-wrapper">
+            <h2>{{ stage }} Process Description</h2>
+            <div class="content">
+                <pre>{{ content }}</pre>
+            </div>
+        </div>
+    </div>
+
+    <!-- Bootstrap JS and dependencies -->
+    <!-- Use versions compatible with Bootstrap 4.5.2 -->
+    <script src="https://code.jquery.com/jquery-3.5.1.slim.min.js"></script>
+    <!-- Correct Popper.js version for Bootstrap 4 -->
+    <script src="https://cdn.jsdelivr.net/npm/popper.js@1.16.1/dist/umd/popper.min.js"></script>
+    <!-- Bootstrap JS -->
+    <script src="https://maxcdn.bootstrapcdn.com/bootstrap/4.5.2/js/bootstrap.min.js"></script>
+</body>
+</html>
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Identified Risks</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+    <!-- Google Font -->
+    <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;700&display=swap" rel="stylesheet">
+    <!-- Bootstrap CSS (if used in index.html) -->
+    <link rel="stylesheet" href="https://maxcdn.bootstrapcdn.com/bootstrap/4.5.2/css/bootstrap.min.css">
+
+    <style>
+        body {
+            background: linear-gradient(to bottom, #e0f7fa, #ffffff);
+            font-family: 'Roboto', sans-serif;
+            color: #333;
+            margin: 0;
+            padding: 0;
+        }
+        .container {
+            max-width: 1000px;
+            margin: 50px auto;
+            padding: 20px;
+            text-align: center;
+        }
+        h1 {
+            font-weight: 700;
+            color: #00796b;
+            font-size: 2.5rem;
+            margin-bottom: 30px;
+        }
+        pre {
+            background-color: #f6f8fa;
+            padding: 20px;
+            border-radius: 12px;
+            border: 1px solid #ddd;
+            font-family: 'Courier New', monospace;
+            font-size: 1rem;
+            color: #333;
+            text-align: left;
+            overflow-x: auto;
+            white-space: pre-wrap;
+            margin: 0 auto;
+            max-width: 800px;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+        }
+        .nav-links {
+            margin-top: 40px;
+        }
+        .nav-links a {
+            color: #00796b;
+            text-decoration: none;
+            margin: 0 15px;
+            font-size: 18px;
+            font-weight: 700;
+        }
+        .nav-links a:hover {
+            text-decoration: underline;
+            color: #004d40;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Identified Risks</h1>
+        <pre id="risks"></pre>
+        <div class="nav-links">
+            <a href="/">Home</a>
+            <a href="/risk_assessment">Risk Assessment</a>
+            <a href="/risk_mitigation">Risk Mitigation</a>
+        </div>
+    </div>
+
+    <!-- Include Bootstrap JS and dependencies (if Bootstrap is used) -->
+    <script src="https://code.jquery.com/jquery-3.5.1.slim.min.js"></script>
+    <!-- Proper Popper.js version for Bootstrap 4 -->
+    <script src="https://cdn.jsdelivr.net/npm/popper.js@1.16.1/dist/umd/popper.min.js"></script>
+    <script src="https://maxcdn.bootstrapcdn.com/bootstrap/4.5.2/js/bootstrap.min.js"></script>
+
+    <script>
+        // Load risks from localStorage and display them
+        const risks = JSON.parse(localStorage.getItem('risks')) || ["No risks identified."];
+        document.getElementById('risks').innerText = risks.join('\n');
+    </script>
+</body>
+</html>
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Agile and Waterfall Modelling</title>
+    <link href="https://maxcdn.bootstrapcdn.com/bootstrap/4.5.2/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;700&display=swap" rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+
+    <style>
+        body {
+            background: linear-gradient(to bottom, #e0f7fa, #ffffff);
+            color: #333;
+            font-family: 'Roboto', sans-serif;
+            margin: 0;
+            padding: 0;
+        }
+        .container {
+            max-width: 1200px;
+            margin: 50px auto;
+            padding: 20px;
+            text-align: center;
+        }
+        h1 {
+            font-weight: 700;
+            color: #00796b;
+            font-size: 2.5rem;
+            text-align: center;
+            margin-bottom: 20px;
+        }
+        .card {
+            border: none;
+            border-radius: 12px;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+            margin-bottom: 20px;
+            background-color: white;
+            padding: 20px;
+        }
+        .card-header {
+            background-color: #00796b;
+            color: white;
+            font-size: 1.5rem;
+            font-weight: 700;
+            border-top-left-radius: 12px;
+            border-top-right-radius: 12px;
+            padding: 15px;
+        }
+        .content {
+            font-size: 1rem;
+            color: #555;
+            background-color: white;
+            border-radius: 12px;
+            padding: 20px;
+            margin-top: 20px;
+            text-align: left;
+        }
+        pre {
+            background-color: #f6f8fa;
+            padding: 15px;
+            border-radius: 8px;
+            border: 1px solid #ddd;
+            font-family: 'Courier New', monospace;
+            overflow-x: auto;
+            white-space: pre-wrap;
+            margin: 0;
+        }
+        .btn-custom {
+            background-color: #00796b;
+            color: white;
+            border: none;
+            border-radius: 8px;
+            padding: 10px 20px;
+            font-size: 16px;
+            transition: background-color 0.3s ease;
+            text-decoration: none;
+        }
+        .btn-custom:hover {
+            background-color: #004d40;
+        }
+        .buttonWrapper {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 15px;
+            justify-content: center;
+            margin-top: 20px;
+        }
+        .chart-container {
+            margin: 30px 0;
+            background: white;
+            padding: 20px;
+            border-radius: 12px;
+        }
+        .lead {
+            font-size: 1.1rem;
+            color: #555;
+            text-align: center;
+            margin-bottom: 20px;
+        }
+        .section-header {
+            margin-top: 40px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Agile and Waterfall Modelling</h1>
+        <p class="lead">Analyze, compare, and make data-driven decisions effortlessly.</p>
+
+        <!-- Project Description Cleaning -->
+        <div class="card">
+            <div class="card-header">Project Description Cleaning</div>
+            <div class="card-body">
+                <form id="description-form">
+                    <div class="form-group">
+                        <label for="description">Project Description:</label>
+                        <textarea class="form-control" id="description" name="description" rows="5" required></textarea>
+                    </div>
+                    <button type="button" class="btn btn-custom" onclick="submitDescription()">Submit</button>
+                </form>
+                <div id="cleaned-result" class="mt-3"></div>
+            </div>
+        </div>
+
+        <!-- Generate Buttons -->
+        <div class="buttonWrapper">
+            <button id="generateProductivityButton" class="btn btn-custom">Generate Productivity</button>
+            <button id="generatePerformanceButton" class="btn btn-custom">Generate Performance</button>
+            <button id="generateMitigationButton" class="btn btn-custom">Generate Risk Mitigation</button>
+        </div>
+
+        <!-- Charts -->
+        <div class="chart-container">
+            <h2>Productivity Analysis</h2>
+            <canvas id="productivityChart" width="400" height="200"></canvas>
+        </div>
+        <div class="chart-container">
+            <h2>Performance Analysis</h2>
+            <canvas id="performanceChart" width="400" height="200"></canvas>
+        </div>
+        <div class="chart-container">
+            <h2>Risk Mitigation</h2>
+            <canvas id="Risk_Mitigation_Chart" width="400" height="200"></canvas>
+        </div>
+
+        <!-- Recommendation Section -->
+        <div class="buttonWrapper">
+            <button id="recommendation-btn" class="btn btn-custom">Get Recommendation</button>
+        </div>
+        <div id="recommendation-section" class="content" style="display:none;">
+            <h2>Recommended Model</h2>
+            <p id="recommendation-content"></p>
+        </div>
+
+        <!-- Actions Section -->
+        <div class="section-header text-center">
+            <h2>Actions</h2>
+            <h4>(Utilize the action buttons to navigate through a comprehensive, step-by-step comparative analysis of Agile and Waterfall methodologies)</h4>
+        </div>
+        <div class="text-center buttonWrapper">
+            <button class="btn btn-custom" onclick="navigateTo('design_page')">Design</button>
+            <button class="btn btn-custom" onclick="navigateTo('prototyping')">Prototyping</button>
+            <button class="btn btn-custom" onclick="navigateTo('customer_evaluation')">Customer Evaluation</button>
+            <button class="btn btn-custom" onclick="navigateTo('review_and_update')">Review and Update</button>
+            <button class="btn btn-custom" onclick="navigateTo('development')">Development</button>
+            <button class="btn btn-custom" onclick="navigateTo('testing')">Testing</button>
+            <button class="btn btn-custom" onclick="navigateTo('maintenance')">Maintenance</button>
+        </div>
+    </div>
+
+    <!-- Include necessary scripts -->
+    <script src="https://ajax.googleapis.com/ajax/libs/jquery/3.5.1/jquery.min.js"></script>
+
+    <!-- JavaScript Code -->
+    <script>
+        // Variable to hold the cleaned description
+        let cleanedDescription = '';
+
+        async function submitDescription() {
+            const description = document.getElementById('description').value.trim();
+            if (!description) {
+                alert('Please enter a project description.');
+                return;
+            }
+
+            try {
+                const response = await fetch('/clean_description/', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ description: description })
+                });
+                if (!response.ok) throw new Error("Network response was not ok");
+                const data = await response.json();
+                cleanedDescription = data.cleaned_description;
+                document.getElementById('cleaned-result').innerText = cleanedDescription;
+            } catch (error) {
+                console.error("Error cleaning description:", error);
+                alert("Failed to clean description. Please check your API or network connection.");
+            }
+        }
+
+        function checkCleanedDescription() {
+            if (!cleanedDescription) {
+                alert('Cleaned description is not available. Please clean the description first.');
+                return false;
+            }
+            return true;
+        }
+
+        async function fetchChartData(url, chartId, label, agileKey, waterfallKey) {
+            if (!checkCleanedDescription()) return;
+
+            try {
+                const response = await fetch(url, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ description: cleanedDescription })
+                });
+                if (!response.ok) throw new Error("Network response was not ok");
+                const data = await response.json();
+
+                console.log('Received data:', data); // Debugging statement
+
+                // Access the correct properties
+                const agileData = data[agileKey];
+                const waterfallData = data[waterfallKey];
+
+                // Validate data
+                if (!Array.isArray(agileData) || !Array.isArray(waterfallData)) {
+                    throw new Error("Invalid data format received from the server.");
+                }
+
+                const ctx = document.getElementById(chartId).getContext('2d');
+                new Chart(ctx, {
+                    type: chartId === 'Risk_Mitigation_Chart' ? 'bar' : 'line',
+                    data: {
+                        labels: ['1', '2', '3', '4', '5'],
+                        datasets: [
+                            {
+                                label: 'Agile',
+                                data: agileData,
+                                borderColor: 'rgba(75, 192, 192, 1)',
+                                backgroundColor: 'rgba(75, 192, 192, 0.2)',
+                                fill: false
+                            },
+                            {
+                                label: 'Waterfall',
+                                data: waterfallData,
+                                borderColor: 'rgba(255, 99, 132, 1)',
+                                backgroundColor: 'rgba(255, 99, 132, 0.2)',
+                                fill: false
+                            }
+                        ]
+                    },
+                    options: {
+                        responsive: true,
+                        scales: {
+                            x: { title: { display: true, text: 'Iterations' } },
+                            y: { title: { display: true, text: label } }
+                        }
+                    }
+                });
+            } catch (error) {
+                console.error("Error fetching data:", error);
+                alert("Failed to fetch data. Please check your API or network connection.");
+            }
+        }
+
+        // Event listeners for generate buttons
+        document.getElementById('generateProductivityButton').addEventListener('click', async () => {
+            await fetchChartData(
+                '/generate_productivity/',
+                'productivityChart',
+                'Productivity',
+                'agile_productivity',
+                'waterfall_productivity'
+            );
+        });
+
+        document.getElementById('generatePerformanceButton').addEventListener('click', async () => {
+            await fetchChartData(
+                '/generate_performance/',
+                'performanceChart',
+                'Performance',
+                'agile_performance',
+                'waterfall_performance'
+            );
+        });
+
+        document.getElementById('generateMitigationButton').addEventListener('click', async () => {
+            await fetchChartData(
+                '/generate_mitigation/',
+                'Risk_Mitigation_Chart',
+                'Risk Mitigation',
+                'agile_mitigation',
+                'waterfall_mitigation'
+            );
+        });
+
+        // Recommendation Button Event Listener
+        document.getElementById('recommendation-btn').addEventListener('click', function() {
+            if (!checkCleanedDescription()) return;
+            fetch(`/recommendation?description=${encodeURIComponent(cleanedDescription)}`)
+                .then(response => response.json())
+                .then(data => {
+                    document.getElementById('recommendation-content').innerText = data.recommendation;
+                    document.getElementById('recommendation-section').style.display = 'block';
+                })
+                .catch(error => {
+                    console.error('Error fetching recommendation:', error);
+                    alert('Failed to fetch recommendation. Please check your API or network connection.');
+                });
+        });
+
+        // Navigation Function
+        function navigateTo(page) {
+            if (!checkCleanedDescription()) return;
+            window.location.href = `/${page}?description=${encodeURIComponent(cleanedDescription)}`;
+        }
+    </script>
+</body>
+</html>
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Maintenance Stage</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <!-- Bootstrap CSS -->
+    <link rel="stylesheet" href="https://maxcdn.bootstrapcdn.com/bootstrap/4.5.2/css/bootstrap.min.css">
+    <!-- Google Font -->
+    <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;700&display=swap" rel="stylesheet">
+    <style>
+        body {
+            background: linear-gradient(to bottom, #e0f7fa, #ffffff);
+            color: #333;
+            font-family: 'Roboto', sans-serif;
+            margin: 0;
+            padding: 0;
+        }
+        .container {
+            max-width: 1200px;
+            margin: 50px auto;
+            padding: 20px;
+            text-align: center;
+        }
+        h1 {
+            font-weight: 700;
+            color: #00796b;
+            font-size: 2.5rem;
+            margin-bottom: 20px;
+        }
+        h2 {
+            font-weight: 700;
+            color: #00796b;
+            font-size: 1.8rem;
+            margin-top: 40px;
+            margin-bottom: 20px;
+        }
+        .lead {
+            font-size: 1.1rem;
+            color: #555;
+            margin-bottom: 20px;
+            text-align: justify;
+        }
+        .content-wrapper {
+            max-width: 1000px;
+            margin: 0 auto;
+            text-align: left;
+        }
+        .content {
+            font-size: 1rem;
+            color: #333;
+            background-color: white;
+            border-radius: 12px;
+            padding: 30px;
+            margin-top: 20px;
+            margin-bottom: 40px;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+        }
+        pre {
+            background-color: #f6f8fa;
+            padding: 20px;
+            border-radius: 8px;
+            border: 1px solid #ddd;
+            font-family: 'Courier New', monospace;
+            overflow-x: auto;
+            white-space: pre-wrap;
+            margin: 0;
+            color: #333;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Maintenance Stage</h1>
+        <div class="content-wrapper">
+            <p class="lead">
+                The maintenance stage involves ongoing support and enhancements after the product has been deployed. This includes fixing any issues that arise, updating features, and ensuring the product continues to meet user needs and operates effectively in its environment. Regular updates and patches are applied to improve performance, security, and usability. The team monitors the product's performance and gathers user feedback to inform future improvements. This stage is crucial for the product's longevity and success, ensuring it remains relevant and valuable over time.
+            </p>
+            <!-- Next Step Button (if applicable) -->
+            <!-- Uncomment the following line if there's a next stage -->
+            <!-- <a href="/next_stage?description={{ cleaned_description | urlencode }}" class="btn btn-custom">Next Step: Next Stage</a> -->
+        </div>
+        <div class="content-wrapper">
+            <h2>{{ stage }} Process Description</h2>
+            <div class="content">
+                <pre>{{ content }}</pre>
+            </div>
+        </div>
+    </div>
+
+    <!-- Bootstrap JS and dependencies -->
+    <!-- Use versions compatible with Bootstrap 4.5.2 -->
+    <script src="https://code.jquery.com/jquery-3.5.1.slim.min.js"></script>
+    <!-- Correct Popper.js version for Bootstrap 4 -->
+    <script src="https://cdn.jsdelivr.net/npm/popper.js@1.16.1/dist/umd/popper.min.js"></script>
+    <!-- Bootstrap JS -->
+    <script src="https://maxcdn.bootstrapcdn.com/bootstrap/4.5.2/js/bootstrap.min.js"></script>
+</body>
+</html>
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Methodology for Risk Management</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <!-- Google Font -->
+    <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;700&display=swap" rel="stylesheet">
+    <!-- Bootstrap CSS (if used in index.html) -->
+    <link rel="stylesheet" href="https://maxcdn.bootstrapcdn.com/bootstrap/4.5.2/css/bootstrap.min.css">
+
+    <style>
+        body {
+            background: linear-gradient(to bottom, #e0f7fa, #ffffff);
+            color: #333;
+            font-family: 'Roboto', sans-serif;
+            padding: 0;
+            margin: 0;
+        }
+        .container {
+            max-width: 1000px;
+            margin: 50px auto;
+            padding: 20px;
+            text-align: center;
+        }
+        h1 {
+            color: #00796b;
+            font-weight: 700;
+            font-size: 2.5rem;
+            margin-bottom: 20px;
+        }
+        h2 {
+            color: #00796b;
+            font-weight: 700;
+            font-size: 1.8rem;
+            margin-top: 30px;
+            margin-bottom: 20px;
+        }
+        p, ul {
+            text-align: left;
+            color: #555;
+            font-size: 1rem;
+            margin-bottom: 15px;
+        }
+        ul {
+            padding-left: 20px;
+        }
+        li {
+            margin-bottom: 10px;
+        }
+        strong {
+            color: #00796b;
+        }
+        a {
+            text-decoration: none;
+            color: #00796b;
+            font-weight: 700;
+        }
+        a:hover {
+            text-decoration: underline;
+            color: #004d40;
+        }
+        .btn-custom {
+            background-color: #00796b;
+            color: white;
+            border: none;
+            border-radius: 8px;
+            padding: 10px 30px;
+            font-size: 16px;
+            cursor: pointer;
+            transition: background-color 0.3s ease;
+            margin-top: 30px;
+            text-decoration: none;
+            display: inline-block;
+        }
+        .btn-custom:hover {
+            background-color: #004d40;
+            color: white;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Methodology for Risk Management</h1>
+        <h2>Determine Data Sources and Types of Data Needed</h2>
+        <p>To provide robust risk management solutions, it is essential to determine the necessary data sources and types of data required:</p>
+        <ul>
+            <li><strong>Project Documentation:</strong> Collect all relevant project documents, including requirements, specifications, and design documents.</li>
+            <li><strong>Communication Patterns:</strong> Analyze communication channels and patterns within the project teams to identify potential areas of risk.</li>
+            <li><strong>Historical Project Data:</strong> Review data from similar previous projects to understand common risks and challenges faced.</li>
+            <li><strong>Current Live Projects:</strong> Gather data from ongoing projects to compare and contrast with the current project's trajectory.</li>
+        </ul>
+        <p>By leveraging these data sources, the project will be better equipped to identify, assess, and manage risks effectively.</p>
+
+        <!-- Updated button for consistency -->
+        <a href="/" class="btn btn-custom">Go Back to Home</a>
+    </div>
+
+    <!-- Include Bootstrap JS and dependencies (if used in index.html) -->
+    <!-- Make sure to include these if Bootstrap components are used in the page -->
+    <script src="https://code.jquery.com/jquery-3.5.1.slim.min.js"></script>
+    <!-- Proper Popper.js version for Bootstrap 4 -->
+    <script src="https://cdn.jsdelivr.net/npm/popper.js@1.16.1/dist/umd/popper.min.js"></script>
+    <!-- Bootstrap JS -->
+    <script src="https://maxcdn.bootstrapcdn.com/bootstrap/4.5.2/js/bootstrap.min.js"></script>
+</body>
+</html>
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Prototyping Stage</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <!-- Bootstrap CSS -->
+    <link rel="stylesheet" href="https://maxcdn.bootstrapcdn.com/bootstrap/4.5.2/css/bootstrap.min.css">
+    <!-- Google Font -->
+    <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;700&display=swap" rel="stylesheet">
+    <style>
+        body {
+            background: linear-gradient(to bottom, #e0f7fa, #ffffff);
+            color: #333;
+            font-family: 'Roboto', sans-serif;
+            margin: 0;
+            padding: 0;
+        }
+        .container {
+            max-width: 1200px;
+            margin: 50px auto;
+            padding: 20px;
+            text-align: center;
+        }
+        h1 {
+            font-weight: 700;
+            color: #00796b;
+            font-size: 2.5rem;
+            margin-bottom: 20px;
+        }
+        h2 {
+            font-weight: 700;
+            color: #00796b;
+            font-size: 1.8rem;
+            margin-top: 40px;
+            margin-bottom: 20px;
+        }
+        .lead {
+            font-size: 1.1rem;
+            color: #555;
+            margin-bottom: 20px;
+            text-align: justify;
+        }
+        .btn-custom {
+            background-color: #00796b;
+            color: white;
+            border: none;
+            border-radius: 8px;
+            padding: 10px 30px;
+            font-size: 16px;
+            transition: background-color 0.3s ease;
+            text-decoration: none;
+            margin-top: 30px;
+            display: inline-block;
+        }
+        .btn-custom:hover {
+            background-color: #004d40;
+            color: white;
+        }
+        .content-wrapper {
+            max-width: 1000px;
+            margin: 0 auto;
+            text-align: left;
+        }
+        .content {
+            font-size: 1rem;
+            color: #333;
+            background-color: white;
+            border-radius: 12px;
+            padding: 30px;
+            margin-top: 20px;
+            margin-bottom: 40px;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+        }
+        pre {
+            background-color: #f6f8fa;
+            padding: 20px;
+            border-radius: 8px;
+            border: 1px solid #ddd;
+            font-family: 'Courier New', monospace;
+            overflow-x: auto;
+            white-space: pre-wrap;
+            margin: 0;
+            color: #333;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Prototyping Stage</h1>
+        <div class="content-wrapper">
+            <p class="lead">
+                Prototyping in Agile involves creating an early version of a product to visualize and test its design and functionality before full-scale development. This approach allows for the validation of concepts by quickly testing ideas with stakeholders to ensure they meet user needs and business requirements. It also facilitates the gathering of user feedback, which is crucial for making informed adjustments and improvements. Additionally, prototyping helps refine requirements by clarifying them based on insights from the prototype, and it reduces risk by identifying potential issues early, which can prevent costly changes later in the development process. The iterative nature of prototyping ensures that the final product evolves to closely align with user expectations and project goals.
+            </p>
+            <a href="/customer_evaluation?description={{ cleaned_description | urlencode }}" class="btn btn-custom">Next Step: Customer Evaluation</a>
+        </div>
+        <div class="content-wrapper">
+            <h2>{{ stage }} Process Description</h2>
+            <div class="content">
+                <pre>{{ content }}</pre>
+            </div>
+        </div>
+    </div>
+    <!-- Bootstrap JS and dependencies -->
+    <!-- Use versions compatible with Bootstrap 4.5.2 -->
+    <script src="https://code.jquery.com/jquery-3.5.1.slim.min.js"></script>
+    <!-- Correct Popper.js version for Bootstrap 4 -->
+    <script src="https://cdn.jsdelivr.net/npm/popper.js@1.16.1/dist/umd/popper.min.js"></script>
+    <!-- Bootstrap JS -->
+    <script src="https://maxcdn.bootstrapcdn.com/bootstrap/4.5.2/js/bootstrap.min.js"></script>
+</body>
+</html>
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Review and Update Stage</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <!-- Bootstrap CSS -->
+    <link rel="stylesheet" href="https://maxcdn.bootstrapcdn.com/bootstrap/4.5.2/css/bootstrap.min.css">
+    <!-- Google Font -->
+    <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;700&display=swap" rel="stylesheet">
+    <style>
+        body {
+            background: linear-gradient(to bottom, #e0f7fa, #ffffff);
+            color: #333;
+            font-family: 'Roboto', sans-serif;
+            margin: 0;
+            padding: 0;
+        }
+        .container {
+            max-width: 1200px;
+            margin: 50px auto;
+            padding: 20px;
+            text-align: center;
+        }
+        h1 {
+            font-weight: 700;
+            color: #00796b;
+            font-size: 2.5rem;
+            margin-bottom: 20px;
+        }
+        h2 {
+            font-weight: 700;
+            color: #00796b;
+            font-size: 1.8rem;
+            margin-top: 40px;
+            margin-bottom: 20px;
+        }
+        .lead {
+            font-size: 1.1rem;
+            color: #555;
+            margin-bottom: 20px;
+            text-align: justify;
+        }
+        .btn-custom {
+            background-color: #00796b;
+            color: white;
+            border: none;
+            border-radius: 8px;
+            padding: 10px 30px;
+            font-size: 16px;
+            transition: background-color 0.3s ease;
+            text-decoration: none;
+            margin-top: 30px;
+            display: inline-block;
+        }
+        .btn-custom:hover {
+            background-color: #004d40;
+            color: white;
+        }
+        .content-wrapper {
+            max-width: 1000px;
+            margin: 0 auto;
+            text-align: left;
+        }
+        .content {
+            font-size: 1rem;
+            color: #333;
+            background-color: white;
+            border-radius: 12px;
+            padding: 30px;
+            margin-top: 20px;
+            margin-bottom: 40px;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+        }
+        pre {
+            background-color: #f6f8fa;
+            padding: 20px;
+            border-radius: 8px;
+            border: 1px solid #ddd;
+            font-family: 'Courier New', monospace;
+            overflow-x: auto;
+            white-space: pre-wrap;
+            margin: 0;
+            color: #333;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Review and Update Stage</h1>
+        <div class="content-wrapper">
+            <p class="lead">
+                The review and update process is essential for keeping the project aligned with user needs and business goals throughout its development. This process involves regularly assessing the work completed at the end of each iteration or sprint. During these reviews, the team demonstrates the product to stakeholders, gathers feedback, and identifies areas for improvement. Based on this feedback, updates are made to refine features, adjust priorities, or modify the product backlog. This iterative approach ensures that the product evolves in response to user input and changing requirements, maintaining its relevance, improving quality, and fostering better team collaboration by continually aligning development efforts with stakeholder expectations.
+            </p>
+            <a href="/development?description={{ cleaned_description | urlencode }}" class="btn btn-custom">Next Step: Development</a>
+        </div>
+        <div class="content-wrapper">
+            <h2>{{ stage }} Process Description</h2>
+            <div class="content">
+                <pre>{{ content }}</pre>
+            </div>
+        </div>
+    </div>
+    <!-- Bootstrap JS and dependencies -->
+    <!-- Use versions compatible with Bootstrap 4.5.2 -->
+    <script src="https://code.jquery.com/jquery-3.5.1.slim.min.js"></script>
+    <!-- Correct Popper.js version for Bootstrap 4 -->
+    <script src="https://cdn.jsdelivr.net/npm/popper.js@1.16.1/dist/umd/popper.min.js"></script>
+    <!-- Bootstrap JS -->
+    <script src="https://maxcdn.bootstrapcdn.com/bootstrap/4.5.2/js/bootstrap.min.js"></script>
+</body>
+</html>
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Risk Assessment</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+    <!-- Google Font -->
+    <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;700&display=swap" rel="stylesheet">
+    <!-- Bootstrap CSS (if used in index.html) -->
+    <link rel="stylesheet" href="https://maxcdn.bootstrapcdn.com/bootstrap/4.5.2/css/bootstrap.min.css">
+
+    <style>
+        body {
+            background: linear-gradient(to bottom, #e0f7fa, #ffffff);
+            font-family: 'Roboto', sans-serif;
+            color: #333;
+            margin: 0;
+            padding: 0;
+        }
+        .container {
+            max-width: 1000px;
+            margin: 50px auto;
+            padding: 20px;
+            text-align: center;
+        }
+        h1 {
+            font-weight: 700;
+            color: #00796b;
+            font-size: 2.5rem;
+            margin-bottom: 30px;
+        }
+        pre {
+            background-color: #f6f8fa;
+            padding: 20px;
+            border-radius: 12px;
+            border: 1px solid #ddd;
+            font-family: 'Courier New', monospace;
+            font-size: 1rem;
+            color: #333;
+            text-align: left;
+            overflow-x: auto;
+            white-space: pre-wrap;
+            margin: 0 auto;
+            max-width: 800px;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+        }
+        .nav-links {
+            margin-top: 40px;
+        }
+        .nav-links a {
+            color: #00796b;
+            text-decoration: none;
+            margin: 0 15px;
+            font-size: 18px;
+            font-weight: 700;
+        }
+        .nav-links a:hover {
+            text-decoration: underline;
+            color: #004d40;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Risk Assessment</h1>
+        <pre id="assessment"></pre>
+        <div class="nav-links">
+            <a href="/">Home</a>
+            <a href="/identified_risks">Identified Risks</a>
+            <a href="/risk_mitigation">Risk Mitigation</a>
+        </div>
+    </div>
+
+    <!-- Include Bootstrap JS and dependencies (if Bootstrap is used) -->
+    <script src="https://code.jquery.com/jquery-3.5.1.slim.min.js"></script>
+    <!-- Proper Popper.js version for Bootstrap 4 -->
+    <script src="https://cdn.jsdelivr.net/npm/popper.js@1.16.1/dist/umd/popper.min.js"></script>
+    <script src="https://maxcdn.bootstrapcdn.com/bootstrap/4.5.2/js/bootstrap.min.js"></script>
+
+    <script>
+        // Display the risk assessment text from localStorage
+        document.getElementById('assessment').innerText = localStorage.getItem('assessment') || "No assessment available.";
+    </script>
+</body>
+</html>
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Risk Mitigation Strategies</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <!-- Google Font -->
+    <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;700&display=swap" rel="stylesheet">
+    <!-- Bootstrap CSS (if used in index.html) -->
+    <link rel="stylesheet" href="https://maxcdn.bootstrapcdn.com/bootstrap/4.5.2/css/bootstrap.min.css">
+
+    <style>
+        body {
+            background: linear-gradient(to bottom, #e0f7fa, #ffffff);
+            color: #333;
+            font-family: 'Roboto', sans-serif;
+            padding: 0;
+            margin: 0;
+        }
+        .container {
+            max-width: 1000px;
+            margin: 50px auto;
+            padding: 20px;
+            text-align: center;
+        }
+        h1 {
+            color: #00796b;
+            font-weight: 700;
+            font-size: 2.5rem;
+            margin-bottom: 20px;
+        }
+        h2 {
+            color: #00796b;
+            font-weight: 700;
+            font-size: 1.8rem;
+            margin-top: 30px;
+            margin-bottom: 20px;
+        }
+        p, ul {
+            text-align: left;
+            color: #555;
+            font-size: 1rem;
+            margin-bottom: 15px;
+        }
+        ul {
+            padding-left: 20px;
+        }
+        li {
+            margin-bottom: 10px;
+        }
+        a {
+            text-decoration: none;
+            color: #00796b;
+            font-weight: 700;
+        }
+        a:hover {
+            text-decoration: underline;
+            color: #004d40;
+        }
+        .btn-custom {
+            background-color: #00796b;
+            color: white;
+            border: none;
+            border-radius: 8px;
+            padding: 10px 30px;
+            font-size: 16px;
+            cursor: pointer;
+            transition: background-color 0.3s ease;
+            margin-top: 30px;
+            text-decoration: none;
+            display: inline-block;
+        }
+        .btn-custom:hover {
+            background-color: #004d40;
+            color: white;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Risk Mitigation Strategies</h1>
+        <p>Here, you will find strategies to mitigate the identified risks effectively.</p>
+        <h2>Potential Mitigation Strategies</h2>
+        <ul>
+            <li>Implement regular integration meetings among teams to identify compatibility issues early.</li>
+            <li>Conduct security audits for user authentication and payment processes.</li>
+            <li>Adopt agile methodologies to adapt to technical challenges promptly.</li>
+            <li>Allocate additional resources or adjust timelines if resource constraints are identified.</li>
+            <li>Engage stakeholders regularly to ensure alignment and address concerns quickly.</li>
+        </ul>
+        <!-- Updated button for consistency -->
+        <a href="/" class="btn btn-custom">Go Back to Home</a>
+    </div>
+
+    <!-- Include Bootstrap JS and dependencies (if used in index.html) -->
+    <!-- Make sure to include these if Bootstrap components are used in the page -->
+    <script src="https://code.jquery.com/jquery-3.5.1.slim.min.js"></script>
+    <!-- Proper Popper.js version for Bootstrap 4 -->
+    <script src="https://cdn.jsdelivr.net/npm/popper.js@1.16.1/dist/umd/popper.min.js"></script>
+    <!-- Bootstrap JS -->
+    <script src="https://maxcdn.bootstrapcdn.com/bootstrap/4.5.2/js/bootstrap.min.js"></script>
+</body>
+</html>
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>{{ stage }} Stage</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <!-- Google Font -->
+    <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;700&display=swap" rel="stylesheet">
+    <!-- Bootstrap CSS (if used in index.html) -->
+    <link rel="stylesheet" href="https://maxcdn.bootstrapcdn.com/bootstrap/4.5.2/css/bootstrap.min.css">
+
+    <style>
+        body {
+            background: linear-gradient(to bottom, #e0f7fa, #ffffff); /* Updated background */
+            color: #333; /* Updated text color */
+            font-family: 'Roboto', sans-serif;
+            margin: 0;
+            padding: 0;
+        }
+        .container {
+            max-width: 1000px;
+            margin: 50px auto;
+            padding: 20px;
+            text-align: center;
+        }
+        h1 {
+            font-weight: 700;
+            color: #00796b; /* Updated primary color */
+            font-size: 2.5rem;
+            margin-bottom: 20px;
+        }
+        .content {
+            font-size: 1rem;
+            color: #333;
+            background-color: white;
+            border-radius: 12px;
+            padding: 30px;
+            margin-top: 20px;
+            margin-bottom: 40px;
+            text-align: left;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+        }
+        pre {
+            background-color: #f6f8fa;
+            padding: 20px;
+            border-radius: 8px;
+            border: 1px solid #ddd;
+            font-family: 'Courier New', monospace;
+            overflow-x: auto;
+            white-space: pre-wrap;
+            margin: 0;
+            color: #333;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>{{ stage }} Stage</h1>
+        <div class="content">
+            <pre>{{ content }}</pre>
+        </div>
+    </div>
+
+    <!-- Include Bootstrap JS and dependencies (if used in index.html) -->
+    <!-- Make sure to include these if Bootstrap components are used in the page -->
+    <script src="https://code.jquery.com/jquery-3.5.1.slim.min.js"></script>
+    <!-- Proper Popper.js version for Bootstrap 4 -->
+    <script src="https://cdn.jsdelivr.net/npm/popper.js@1.16.1/dist/umd/popper.min.js"></script>
+    <!-- Bootstrap JS -->
+    <script src="https://maxcdn.bootstrapcdn.com/bootstrap/4.5.2/js/bootstrap.min.js"></script>
+</body>
+</html>
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Test Prototype</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <!-- Google Font -->
+    <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;700&display=swap" rel="stylesheet">
+    <!-- Bootstrap CSS -->
+    <link rel="stylesheet" href="https://maxcdn.bootstrapcdn.com/bootstrap/4.5.2/css/bootstrap.min.css">
+
+    <style>
+        body {
+            background: linear-gradient(to bottom, #e0f7fa, #ffffff);
+            color: #333;
+            font-family: 'Roboto', sans-serif;
+            margin: 0;
+            padding: 0;
+        }
+
+        .container {
+            max-width: 1000px;
+            margin: 50px auto;
+            padding: 20px;
+            text-align: center;
+        }
+
+        h1 {
+            font-weight: 700;
+            color: #00796b;
+            font-size: 2.5rem;
+            margin-bottom: 20px;
+        }
+
+        label {
+            display: block;
+            margin-bottom: 5px;
+            font-weight: bold;
+            text-align: left;
+            color: #333;
+            font-size: 1rem;
+        }
+
+        textarea {
+            width: 100%;
+            padding: 15px;
+            font-family: 'Roboto', sans-serif;
+            font-size: 1rem;
+            border: 1px solid #ccc;
+            border-radius: 8px;
+            resize: vertical;
+            margin-bottom: 20px;
+        }
+
+        .btn-custom {
+            background-color: #00796b;
+            color: white;
+            border: none;
+            border-radius: 8px;
+            padding: 10px 30px;
+            font-size: 16px;
+            transition: background-color 0.3s ease;
+            text-decoration: none;
+            margin-top: 20px;
+            display: inline-block;
+        }
+
+        .btn-custom:hover {
+            background-color: #004d40;
+            color: white;
+        }
+
+        pre {
+            background-color: #f6f8fa;
+            padding: 20px;
+            border-radius: 8px;
+            border: 1px solid #ddd;
+            font-family: 'Courier New', monospace;
+            overflow-x: auto;
+            white-space: pre-wrap;
+            margin-top: 20px;
+            color: #333;
+            text-align: left;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Test Prototype</h1>
+        <div class="form-group">
+            <label for="test-description">Description for Testing:</label>
+            <textarea id="test-description" rows="10" placeholder="Enter the description for testing..." required></textarea>
+        </div>
+        <button class="btn btn-custom" onclick="submitTest()">Test Prototype</button>
+        <pre id="test-results"></pre>
+    </div>
+
+    <!-- Include Bootstrap JS and dependencies -->
+    <script src="https://code.jquery.com/jquery-3.5.1.slim.min.js"></script>
+    <!-- Correct Popper.js version for Bootstrap 4 -->
+    <script src="https://cdn.jsdelivr.net/npm/popper.js@1.16.1/dist/umd/popper.min.js"></script>
+    <!-- Bootstrap JS -->
+    <script src="https://maxcdn.bootstrapcdn.com/bootstrap/4.5.2/js/bootstrap.min.js"></script>
+
+    <script>
+        async function submitTest() {
+            const description = document.getElementById('test-description').value;
+            if (!description.trim()) {
+                alert("Please enter a description before testing.");
+                return;
+            }
+            try {
+                const response = await fetch('/test_prototype/', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ description: description })
+                });
+                const data = await response.json();
+                document.getElementById('test-results').innerText = JSON.stringify(data.test_results, null, 2);
+            } catch (error) {
+                document.getElementById('test-results').innerText = "Error: " + error.message;
+            }
+        }
+    </script>
+</body>
+</html>
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Testing Stage</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <!-- Bootstrap CSS -->
+    <link rel="stylesheet" href="https://maxcdn.bootstrapcdn.com/bootstrap/4.5.2/css/bootstrap.min.css">
+    <!-- Google Font -->
+    <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;700&display=swap" rel="stylesheet">
+    <style>
+        body {
+            background: linear-gradient(to bottom, #e0f7fa, #ffffff);
+            color: #333;
+            font-family: 'Roboto', sans-serif;
+            margin: 0;
+            padding: 0;
+        }
+        .container {
+            max-width: 1200px;
+            margin: 50px auto;
+            padding: 20px;
+            text-align: center;
+        }
+        h1 {
+            font-weight: 700;
+            color: #00796b;
+            font-size: 2.5rem;
+            margin-bottom: 20px;
+        }
+        h2 {
+            font-weight: 700;
+            color: #00796b;
+            font-size: 1.8rem;
+            margin-top: 40px;
+            margin-bottom: 20px;
+        }
+        .lead {
+            font-size: 1.1rem;
+            color: #555;
+            text-align: justify;
+            margin-bottom: 20px;
+        }
+        .btn-custom {
+            background-color: #00796b;
+            color: white;
+            border: none;
+            border-radius: 8px;
+            padding: 10px 30px;
+            font-size: 16px;
+            transition: background-color 0.3s ease;
+            text-decoration: none;
+            margin-top: 30px;
+            display: inline-block;
+        }
+        .btn-custom:hover {
+            background-color: #004d40;
+            color: white;
+        }
+        .content-wrapper {
+            max-width: 1000px;
+            margin: 0 auto;
+            text-align: left;
+        }
+        .content {
+            font-size: 1rem;
+            color: #333;
+            background-color: white;
+            border-radius: 12px;
+            padding: 30px;
+            margin-top: 20px;
+            margin-bottom: 40px;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+        }
+        pre {
+            background-color: #f6f8fa;
+            padding: 20px;
+            border-radius: 8px;
+            border: 1px solid #ddd;
+            font-family: 'Courier New', monospace;
+            overflow-x: auto;
+            white-space: pre-wrap;
+            margin: 0;
+            color: #333;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Testing Stage</h1>
+        <div class="content-wrapper">
+            <p class="lead">
+                In Agile, testing is a continuous and integral part of the development process, aimed at ensuring the product meets the required standards of quality and functionality. Testing begins early in the development cycle and occurs throughout each iteration or sprint. It involves various types of tests, including unit tests to verify individual components, integration tests to check interactions between components, and system tests to ensure the product functions as a whole. Additionally, user acceptance testing is performed to validate that the product meets user needs and expectations. Test results are used to identify and address defects or issues, and feedback from testing helps guide ongoing development and improvements. This iterative approach to testing ensures that quality is maintained and issues are resolved promptly, allowing for a product that aligns closely with project goals and user requirements.
+            </p>
+            <a href="/maintenance?description={{ cleaned_description | urlencode }}" class="btn btn-custom">Next Stage: Maintenance</a>
+        </div>
+        <div class="content-wrapper">
+            <h2>{{ stage }} Process Description</h2>
+            <div class="content">
+                <pre>{{ content }}</pre>
+            </div>
+        </div>
+    </div>
+    <!-- Bootstrap JS and dependencies -->
+    <!-- Use versions compatible with Bootstrap 4.5.2 -->
+    <script src="https://code.jquery.com/jquery-3.5.1.slim.min.js"></script>
+    <!-- Correct Popper.js version for Bootstrap 4 -->
+    <script src="https://cdn.jsdelivr.net/npm/popper.js@1.16.1/dist/umd/popper.min.js"></script>
+    <!-- Bootstrap JS -->
+    <script src="https://maxcdn.bootstrapcdn.com/bootstrap/4.5.2/js/bootstrap.min.js"></script>
+</body>
+</html>
