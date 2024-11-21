@@ -1,0 +1,321 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Agile and Waterfall Modelling</title>
+    <link href="https://maxcdn.bootstrapcdn.com/bootstrap/4.5.2/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;700&display=swap" rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+
+    <style>
+        body {
+            background: linear-gradient(to bottom, #e0f7fa, #ffffff);
+            color: #333;
+            font-family: 'Roboto', sans-serif;
+            margin: 0;
+            padding: 0;
+        }
+        .container {
+            max-width: 1200px;
+            margin: 50px auto;
+            padding: 20px;
+            text-align: center;
+        }
+        h1 {
+            font-weight: 700;
+            color: #00796b;
+            font-size: 2.5rem;
+            text-align: center;
+            margin-bottom: 20px;
+        }
+        .card {
+            border: none;
+            border-radius: 12px;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+            margin-bottom: 20px;
+            background-color: white;
+            padding: 20px;
+        }
+        .card-header {
+            background-color: #00796b;
+            color: white;
+            font-size: 1.5rem;
+            font-weight: 700;
+            border-top-left-radius: 12px;
+            border-top-right-radius: 12px;
+            padding: 15px;
+        }
+        .content {
+            font-size: 1rem;
+            color: #555;
+            background-color: white;
+            border-radius: 12px;
+            padding: 20px;
+            margin-top: 20px;
+            text-align: left;
+        }
+        pre {
+            background-color: #f6f8fa;
+            padding: 15px;
+            border-radius: 8px;
+            border: 1px solid #ddd;
+            font-family: 'Courier New', monospace;
+            overflow-x: auto;
+            white-space: pre-wrap;
+            margin: 0;
+        }
+        .btn-custom {
+            background-color: #00796b;
+            color: white;
+            border: none;
+            border-radius: 8px;
+            padding: 10px 20px;
+            font-size: 16px;
+            transition: background-color 0.3s ease;
+            text-decoration: none;
+        }
+        .btn-custom:hover {
+            background-color: #004d40;
+        }
+        .buttonWrapper {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 15px;
+            justify-content: center;
+            margin-top: 20px;
+        }
+        .chart-container {
+            margin: 30px 0;
+            background: white;
+            padding: 20px;
+            border-radius: 12px;
+        }
+        .lead {
+            font-size: 1.1rem;
+            color: #555;
+            text-align: center;
+            margin-bottom: 20px;
+        }
+        .section-header {
+            margin-top: 40px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Agile and Waterfall Modelling</h1>
+        <p class="lead">Analyze, compare, and make data-driven decisions effortlessly.</p>
+
+        <!-- Project Description Cleaning -->
+        <div class="card">
+            <div class="card-header">Project Description Cleaning</div>
+            <div class="card-body">
+                <form id="description-form">
+                    <div class="form-group">
+                        <label for="description">Project Description:</label>
+                        <textarea class="form-control" id="description" name="description" rows="5" required></textarea>
+                    </div>
+                    <button type="button" class="btn btn-custom" onclick="submitDescription()">Submit</button>
+                </form>
+                <div id="cleaned-result" class="mt-3"></div>
+            </div>
+        </div>
+
+        <!-- Generate Buttons -->
+        <div class="buttonWrapper">
+            <button id="generateProductivityButton" class="btn btn-custom">Generate Productivity</button>
+            <button id="generatePerformanceButton" class="btn btn-custom">Generate Performance</button>
+            <button id="generateMitigationButton" class="btn btn-custom">Generate Risk Mitigation</button>
+        </div>
+
+        <!-- Charts -->
+        <div class="chart-container">
+            <h2>Productivity Analysis</h2>
+            <canvas id="productivityChart" width="400" height="200"></canvas>
+        </div>
+        <div class="chart-container">
+            <h2>Performance Analysis</h2>
+            <canvas id="performanceChart" width="400" height="200"></canvas>
+        </div>
+        <div class="chart-container">
+            <h2>Risk Mitigation</h2>
+            <canvas id="Risk_Mitigation_Chart" width="400" height="200"></canvas>
+        </div>
+
+        <!-- Recommendation Section -->
+        <div class="buttonWrapper">
+            <button id="recommendation-btn" class="btn btn-custom">Get Recommendation</button>
+        </div>
+        <div id="recommendation-section" class="content" style="display:none;">
+            <h2>Recommended Model</h2>
+            <p id="recommendation-content"></p>
+        </div>
+
+        <!-- Actions Section -->
+        <div class="section-header text-center">
+            <h2>Actions</h2>
+            <h4>(Utilize the action buttons to navigate through a comprehensive, step-by-step comparative analysis of Agile and Waterfall methodologies)</h4>
+        </div>
+        <div class="text-center buttonWrapper">
+            <button class="btn btn-custom" onclick="navigateTo('design_page')">Design</button>
+            <button class="btn btn-custom" onclick="navigateTo('prototyping')">Prototyping</button>
+            <button class="btn btn-custom" onclick="navigateTo('customer_evaluation')">Customer Evaluation</button>
+            <button class="btn btn-custom" onclick="navigateTo('review_and_update')">Review and Update</button>
+            <button class="btn btn-custom" onclick="navigateTo('development')">Development</button>
+            <button class="btn btn-custom" onclick="navigateTo('testing')">Testing</button>
+            <button class="btn btn-custom" onclick="navigateTo('maintenance')">Maintenance</button>
+        </div>
+    </div>
+
+    <!-- Include necessary scripts -->
+    <script src="https://ajax.googleapis.com/ajax/libs/jquery/3.5.1/jquery.min.js"></script>
+
+    <!-- JavaScript Code -->
+    <script>
+        // Variable to hold the cleaned description
+        let cleanedDescription = '';
+
+        async function submitDescription() {
+            const description = document.getElementById('description').value.trim();
+            if (!description) {
+                alert('Please enter a project description.');
+                return;
+            }
+
+            try {
+                const response = await fetch('/clean_description/', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ description: description })
+                });
+                if (!response.ok) throw new Error("Network response was not ok");
+                const data = await response.json();
+                cleanedDescription = data.cleaned_description;
+                document.getElementById('cleaned-result').innerText = cleanedDescription;
+            } catch (error) {
+                console.error("Error cleaning description:", error);
+                alert("Failed to clean description. Please check your API or network connection.");
+            }
+        }
+
+        function checkCleanedDescription() {
+            if (!cleanedDescription) {
+                alert('Cleaned description is not available. Please clean the description first.');
+                return false;
+            }
+            return true;
+        }
+
+        async function fetchChartData(url, chartId, label, agileKey, waterfallKey) {
+            if (!checkCleanedDescription()) return;
+
+            try {
+                const response = await fetch(url, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ description: cleanedDescription })
+                });
+                if (!response.ok) throw new Error("Network response was not ok");
+                const data = await response.json();
+
+                console.log('Received data:', data); // Debugging statement
+
+                // Access the correct properties
+                const agileData = data[agileKey];
+                const waterfallData = data[waterfallKey];
+
+                // Validate data
+                if (!Array.isArray(agileData) || !Array.isArray(waterfallData)) {
+                    throw new Error("Invalid data format received from the server.");
+                }
+
+                const ctx = document.getElementById(chartId).getContext('2d');
+                new Chart(ctx, {
+                    type: chartId === 'Risk_Mitigation_Chart' ? 'bar' : 'line',
+                    data: {
+                        labels: ['1', '2', '3', '4', '5'],
+                        datasets: [
+                            {
+                                label: 'Agile',
+                                data: agileData,
+                                borderColor: 'rgba(75, 192, 192, 1)',
+                                backgroundColor: 'rgba(75, 192, 192, 0.2)',
+                                fill: false
+                            },
+                            {
+                                label: 'Waterfall',
+                                data: waterfallData,
+                                borderColor: 'rgba(255, 99, 132, 1)',
+                                backgroundColor: 'rgba(255, 99, 132, 0.2)',
+                                fill: false
+                            }
+                        ]
+                    },
+                    options: {
+                        responsive: true,
+                        scales: {
+                            x: { title: { display: true, text: 'Iterations' } },
+                            y: { title: { display: true, text: label } }
+                        }
+                    }
+                });
+            } catch (error) {
+                console.error("Error fetching data:", error);
+                alert("Failed to fetch data. Please check your API or network connection.");
+            }
+        }
+
+        // Event listeners for generate buttons
+        document.getElementById('generateProductivityButton').addEventListener('click', async () => {
+            await fetchChartData(
+                '/generate_productivity/',
+                'productivityChart',
+                'Productivity',
+                'agile_productivity',
+                'waterfall_productivity'
+            );
+        });
+
+        document.getElementById('generatePerformanceButton').addEventListener('click', async () => {
+            await fetchChartData(
+                '/generate_performance/',
+                'performanceChart',
+                'Performance',
+                'agile_performance',
+                'waterfall_performance'
+            );
+        });
+
+        document.getElementById('generateMitigationButton').addEventListener('click', async () => {
+            await fetchChartData(
+                '/generate_mitigation/',
+                'Risk_Mitigation_Chart',
+                'Risk Mitigation',
+                'agile_mitigation',
+                'waterfall_mitigation'
+            );
+        });
+
+        // Recommendation Button Event Listener
+        document.getElementById('recommendation-btn').addEventListener('click', function() {
+            if (!checkCleanedDescription()) return;
+            fetch(`/recommendation?description=${encodeURIComponent(cleanedDescription)}`)
+                .then(response => response.json())
+                .then(data => {
+                    document.getElementById('recommendation-content').innerText = data.recommendation;
+                    document.getElementById('recommendation-section').style.display = 'block';
+                })
+                .catch(error => {
+                    console.error('Error fetching recommendation:', error);
+                    alert('Failed to fetch recommendation. Please check your API or network connection.');
+                });
+        });
+
+        // Navigation Function
+        function navigateTo(page) {
+            if (!checkCleanedDescription()) return;
+            window.location.href = `/${page}?description=${encodeURIComponent(cleanedDescription)}`;
+        }
+    </script>
+</body>
+</html>

@@ -1,0 +1,275 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Agile vs Waterfall Productivity Comparison</title>
+    <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;700&display=swap" rel="stylesheet">
+    <!-- Specify Chart.js version for compatibility -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@3.9.1"></script>
+    <style>
+        body {
+            background: linear-gradient(to bottom, #e0f7fa, #ffffff);
+            color: #333;
+            font-family: 'Roboto', sans-serif;
+            margin: 0;
+            padding: 0;
+        }
+        .container {
+            max-width: 1200px;
+            margin: 50px auto;
+            padding: 20px;
+            text-align: center;
+        }
+        h1 {
+            font-weight: 700;
+            color: #00796b;
+            font-size: 2.5rem;
+            margin-bottom: 20px;
+        }
+        .chart-container {
+            display: flex;
+            justify-content: space-between;
+            gap: 20px;
+            flex-wrap: wrap;
+            margin-top: 30px;
+        }
+        .chart-wrapper {
+            width: 45%;
+            background-color: white;
+            padding: 20px;
+            border-radius: 12px;
+            box-sizing: border-box;
+            position: relative;
+            height: 400px; /* Set a fixed height for charts */
+        }
+        @media (max-width: 768px) {
+            .chart-wrapper {
+                width: 100%;
+            }
+        }
+        .btn-custom {
+            background-color: #00796b;
+            color: white;
+            border: none;
+            border-radius: 8px;
+            padding: 10px 20px;
+            font-size: 16px;
+            transition: background-color 0.3s ease;
+            text-decoration: none;
+            margin-top: 20px;
+        }
+        .btn-custom:hover {
+            background-color: #004d40;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Agile vs Waterfall Productivity Comparison</h1>
+
+        <!-- Project Description Input -->
+        <div class="card">
+            <div class="card-header">Project Description Cleaning</div>
+            <div class="card-body">
+                <form id="description-form">
+                    <div class="form-group">
+                        <label for="description">Project Description:</label>
+                        <textarea class="form-control" id="description" name="description" rows="5" required></textarea>
+                    </div>
+                    <button type="button" class="btn btn-custom" onclick="submitDescription()">Submit</button>
+                </form>
+                <div id="cleaned-result" class="mt-3"></div>
+            </div>
+        </div>
+
+        <!-- Generate Chart Button -->
+        <button id="generateChartsButton" class="btn btn-custom" style="display: none;">Generate Charts</button>
+
+        <!-- Charts Container -->
+        <div class="chart-container" id="chartsSection" style="display: none;">
+            <div class="chart-wrapper">
+                <h2>Agile Productivity</h2>
+                <canvas id="agileChart"></canvas>
+            </div>
+            <div class="chart-wrapper">
+                <h2>Waterfall Productivity</h2>
+                <canvas id="waterfallChart"></canvas>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let cleanedDescription = '';
+
+        async function submitDescription() {
+            const description = document.getElementById('description').value.trim();
+            if (!description) {
+                alert('Please enter a project description.');
+                return;
+            }
+
+            try {
+                const response = await fetch('/clean_description/', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ description: description })
+                });
+                if (!response.ok) throw new Error("Network response was not ok");
+                const data = await response.json();
+                cleanedDescription = data.cleaned_description;
+                document.getElementById('cleaned-result').innerText = cleanedDescription;
+                document.getElementById('generateChartsButton').style.display = 'inline-block';
+            } catch (error) {
+                console.error("Error cleaning description:", error);
+                alert("Failed to clean description. Please check your API or network connection.");
+            }
+        }
+
+        function checkCleanedDescription() {
+            if (!cleanedDescription) {
+                alert('Cleaned description is not available. Please clean the description first.');
+                return false;
+            }
+            return true;
+        }
+
+        document.getElementById('generateChartsButton').addEventListener('click', async () => {
+            if (!checkCleanedDescription()) return;
+
+            try {
+                const response = await fetch('/generate_productivity/', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ description: cleanedDescription })
+                });
+                if (!response.ok) throw new Error("Network response was not ok");
+                const data = await response.json();
+
+                console.log('Received data:', data); // Debugging statement
+
+                const agileData = data.agile_productivity;
+                const waterfallData = data.waterfall_productivity;
+
+                // Validate data
+                if (!Array.isArray(agileData) || !Array.isArray(waterfallData)) {
+                    throw new Error("Invalid data format received from the server.");
+                }
+
+                // Generate charts
+                generateCharts(agileData, waterfallData);
+                document.getElementById('chartsSection').style.display = 'flex';
+            } catch (error) {
+                console.error("Error fetching data:", error);
+                alert("Failed to fetch data. Please check your API or network connection.");
+            }
+        });
+
+        function generateCharts(agileValues, waterfallValues) {
+            // Labels for the charts
+            const labels = ['Point 1', 'Point 2', 'Point 3', 'Point 4', 'Point 5'];
+
+            // Agile Productivity Chart Data
+            const agileChartData = {
+                labels: labels,
+                datasets: [{
+                    label: 'Agile Productivity',
+                    data: agileValues,
+                    backgroundColor: 'rgba(75, 192, 192, 0.6)',
+                    borderColor: 'rgba(75, 192, 192, 1)',
+                    borderWidth: 2
+                }]
+            };
+
+            // Waterfall Productivity Chart Data
+            const waterfallChartData = {
+                labels: labels,
+                datasets: [{
+                    label: 'Waterfall Productivity',
+                    data: waterfallValues,
+                    backgroundColor: 'rgba(255, 99, 132, 0.6)',
+                    borderColor: 'rgba(255, 99, 132, 1)',
+                    borderWidth: 2
+                }]
+            };
+
+            // Configuration for Agile Chart
+            const configAgile = {
+                type: 'bar',
+                data: agileChartData,
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    scales: {
+                        y: {
+                            beginAtZero: true,
+                            title: {
+                                display: true,
+                                text: 'Productivity'
+                            }
+                        },
+                        x: {
+                            title: {
+                                display: true,
+                                text: 'Time Points'
+                            }
+                        }
+                    },
+                    plugins: {
+                        legend: {
+                            display: true,
+                            position: 'top'
+                        }
+                    }
+                }
+            };
+
+            // Configuration for Waterfall Chart
+            const configWaterfall = {
+                type: 'bar',
+                data: waterfallChartData,
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    scales: {
+                        y: {
+                            beginAtZero: true,
+                            title: {
+                                display: true,
+                                text: 'Productivity'
+                            }
+                        },
+                        x: {
+                            title: {
+                                display: true,
+                                text: 'Time Points'
+                            }
+                        }
+                    },
+                    plugins: {
+                        legend: {
+                            display: true,
+                            position: 'top'
+                        }
+                    }
+                };
+            };
+
+            // Destroy existing charts if they exist
+            if (window.agileChartInstance) {
+                window.agileChartInstance.destroy();
+            }
+            if (window.waterfallChartInstance) {
+                window.waterfallChartInstance.destroy();
+            }
+
+            // Render Agile Chart
+            const agileCtx = document.getElementById('agileChart').getContext('2d');
+            window.agileChartInstance = new Chart(agileCtx, configAgile);
+
+            // Render Waterfall Chart
+            const waterfallCtx = document.getElementById('waterfallChart').getContext('2d');
+            window.waterfallChartInstance = new Chart(waterfallCtx, configWaterfall);
+        }
+    </script>
+</body>
+</html>

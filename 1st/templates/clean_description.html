@@ -1,0 +1,163 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Clean Project Description</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <!-- Include Google Fonts and Bootstrap for consistent styling -->
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;700&display=swap">
+    <!-- Bootstrap CSS (Optional, if you used it in index.html) -->
+    <link rel="stylesheet" href="https://maxcdn.bootstrapcdn.com/bootstrap/4.5.2/css/bootstrap.min.css">
+
+    <style>
+        body {
+            background: linear-gradient(to bottom, #e0f7fa, #ffffff);
+            color: #333;
+            font-family: 'Roboto', sans-serif;
+            margin: 0;
+            padding: 0;
+        }
+        .container {
+            max-width: 800px;
+            margin: 50px auto;
+            padding: 20px;
+            text-align: center;
+        }
+        h1 {
+            font-weight: 700;
+            color: #00796b;
+            font-size: 2.5rem;
+            margin-bottom: 20px;
+        }
+        h2 {
+            font-weight: 700;
+            color: #00796b;
+            font-size: 1.8rem;
+            margin-top: 30px;
+            margin-bottom: 20px;
+        }
+        form {
+            margin-bottom: 30px;
+            background-color: white;
+            padding: 20px;
+            border-radius: 12px;
+        }
+        label {
+            display: block;
+            font-size: 1.2rem;
+            color: #00796b;
+            margin-bottom: 10px;
+            text-align: left;
+        }
+        textarea {
+            width: 100%;
+            padding: 10px;
+            border-radius: 8px;
+            border: 1px solid #ddd;
+            font-family: 'Roboto', sans-serif;
+            font-size: 1rem;
+            resize: vertical;
+        }
+        .btn-custom {
+            background-color: #00796b;
+            color: white;
+            border: none;
+            border-radius: 8px;
+            padding: 10px 20px;
+            font-size: 16px;
+            cursor: pointer;
+            transition: background-color 0.3s ease;
+            margin-top: 10px;
+            text-decoration: none;
+        }
+        .btn-custom:hover {
+            background-color: #004d40;
+        }
+        pre {
+            background-color: #f6f8fa;
+            padding: 15px;
+            border-radius: 8px;
+            border: 1px solid #ddd;
+            text-align: left;
+            font-family: 'Courier New', monospace;
+            overflow-x: auto;
+            white-space: pre-wrap;
+            color: #333;
+        }
+        .card {
+            border: none;
+            border-radius: 12px;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+            margin-bottom: 20px;
+            background-color: white;
+            padding: 20px;
+            text-align: left;
+        }
+        .card-header {
+            background-color: #00796b;
+            color: white;
+            font-size: 1.5rem;
+            font-weight: 700;
+            border-top-left-radius: 12px;
+            border-top-right-radius: 12px;
+            padding: 15px;
+            margin: -20px -20px 20px -20px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Clean Project Description</h1>
+
+        <!-- Project Description Cleaning Card -->
+        <div class="card">
+            <div class="card-header">Project Description Cleaning</div>
+            <div class="card-body">
+                <form id="clean-form">
+                    <label for="description">Project Description:</label>
+                    <textarea id="description" name="description" rows="10" required></textarea>
+                    <button type="button" class="btn btn-custom" onclick="submitForm()">Submit</button>
+                </form>
+                <h2>Cleaned Description:</h2>
+                <pre id="cleaned_description"></pre>
+                <button onclick="navigateToHome()" class="btn btn-custom">Home</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Prevent form submission on Enter key press
+        document.getElementById('clean-form').addEventListener('submit', function(event) {
+            event.preventDefault();
+        });
+
+        async function submitForm() {
+            const description = document.getElementById('description').value.trim();
+            if (!description) {
+                alert('Please enter a project description.');
+                return;
+            }
+
+            try {
+                const response = await fetch('/clean_description/', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ description: description })
+                });
+                if (!response.ok) throw new Error('Network response was not ok');
+                const data = await response.json();
+                document.getElementById('cleaned_description').innerText = data.cleaned_description;
+            } catch (error) {
+                console.error('Error:', error);
+                document.getElementById('cleaned_description').innerText = 'An error occurred while cleaning the description. Please try again later.';
+            }
+        }
+
+        function navigateToHome() {
+            window.location.href = '/';
+        }
+    </script>
+</body>
+</html>

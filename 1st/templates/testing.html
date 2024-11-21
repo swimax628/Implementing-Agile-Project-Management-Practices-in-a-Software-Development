@@ -1,0 +1,112 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Testing Stage</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <!-- Bootstrap CSS -->
+    <link rel="stylesheet" href="https://maxcdn.bootstrapcdn.com/bootstrap/4.5.2/css/bootstrap.min.css">
+    <!-- Google Font -->
+    <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;700&display=swap" rel="stylesheet">
+    <style>
+        body {
+            background: linear-gradient(to bottom, #e0f7fa, #ffffff);
+            color: #333;
+            font-family: 'Roboto', sans-serif;
+            margin: 0;
+            padding: 0;
+        }
+        .container {
+            max-width: 1200px;
+            margin: 50px auto;
+            padding: 20px;
+            text-align: center;
+        }
+        h1 {
+            font-weight: 700;
+            color: #00796b;
+            font-size: 2.5rem;
+            margin-bottom: 20px;
+        }
+        h2 {
+            font-weight: 700;
+            color: #00796b;
+            font-size: 1.8rem;
+            margin-top: 40px;
+            margin-bottom: 20px;
+        }
+        .lead {
+            font-size: 1.1rem;
+            color: #555;
+            text-align: justify;
+            margin-bottom: 20px;
+        }
+        .btn-custom {
+            background-color: #00796b;
+            color: white;
+            border: none;
+            border-radius: 8px;
+            padding: 10px 30px;
+            font-size: 16px;
+            transition: background-color 0.3s ease;
+            text-decoration: none;
+            margin-top: 30px;
+            display: inline-block;
+        }
+        .btn-custom:hover {
+            background-color: #004d40;
+            color: white;
+        }
+        .content-wrapper {
+            max-width: 1000px;
+            margin: 0 auto;
+            text-align: left;
+        }
+        .content {
+            font-size: 1rem;
+            color: #333;
+            background-color: white;
+            border-radius: 12px;
+            padding: 30px;
+            margin-top: 20px;
+            margin-bottom: 40px;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+        }
+        pre {
+            background-color: #f6f8fa;
+            padding: 20px;
+            border-radius: 8px;
+            border: 1px solid #ddd;
+            font-family: 'Courier New', monospace;
+            overflow-x: auto;
+            white-space: pre-wrap;
+            margin: 0;
+            color: #333;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Testing Stage</h1>
+        <div class="content-wrapper">
+            <p class="lead">
+                In Agile, testing is a continuous and integral part of the development process, aimed at ensuring the product meets the required standards of quality and functionality. Testing begins early in the development cycle and occurs throughout each iteration or sprint. It involves various types of tests, including unit tests to verify individual components, integration tests to check interactions between components, and system tests to ensure the product functions as a whole. Additionally, user acceptance testing is performed to validate that the product meets user needs and expectations. Test results are used to identify and address defects or issues, and feedback from testing helps guide ongoing development and improvements. This iterative approach to testing ensures that quality is maintained and issues are resolved promptly, allowing for a product that aligns closely with project goals and user requirements.
+            </p>
+            <a href="/maintenance?description={{ cleaned_description | urlencode }}" class="btn btn-custom">Next Stage: Maintenance</a>
+        </div>
+        <div class="content-wrapper">
+            <h2>{{ stage }} Process Description</h2>
+            <div class="content">
+                <pre>{{ content }}</pre>
+            </div>
+        </div>
+    </div>
+    <!-- Bootstrap JS and dependencies -->
+    <!-- Use versions compatible with Bootstrap 4.5.2 -->
+    <script src="https://code.jquery.com/jquery-3.5.1.slim.min.js"></script>
+    <!-- Correct Popper.js version for Bootstrap 4 -->
+    <script src="https://cdn.jsdelivr.net/npm/popper.js@1.16.1/dist/umd/popper.min.js"></script>
+    <!-- Bootstrap JS -->
+    <script src="https://maxcdn.bootstrapcdn.com/bootstrap/4.5.2/js/bootstrap.min.js"></script>
+</body>
+</html>
