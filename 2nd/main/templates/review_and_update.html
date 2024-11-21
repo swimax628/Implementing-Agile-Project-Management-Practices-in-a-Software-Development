@@ -1,0 +1,22 @@
+<!-- templates/review_and_update.html -->
+{% extends "base.html" %}
+
+{% block title %}Review & Update Stage{% endblock %}
+
+{% block content %}
+<h1>Review & Update Stage</h1>
+<div class="content-wrapper">
+    <p class="lead">
+        The review and update stage focuses on analyzing feedback from testing and customer evaluations to make necessary improvements. This iterative process ensures that the product evolves to better meet user expectations and resolves any issues identified during previous stages.
+    </p>
+    <!-- Buttons -->
+    <button id="generateReviewUpdateButton" class="btn btn-custom">Generate Review & Update Plan</button>
+    <a href="/development?description={{ cleaned_description | urlencode }}" class="btn btn-custom">Next Stage: Development</a>
+</div>
+<div class="content-wrapper">
+    <h2>{{ stage }} Process Description</h2>
+    <div class="content">
+        <pre id="review_update_content">{{ content }}</pre>
+    </div>
+</div>
+{% endblock %}

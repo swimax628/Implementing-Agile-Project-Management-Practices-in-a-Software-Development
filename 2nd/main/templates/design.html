@@ -1,0 +1,22 @@
+<!-- templates/design.html -->
+{% extends "base.html" %}
+
+{% block title %}Design Stage{% endblock %}
+
+{% block content %}
+<h1>Design Stage</h1>
+<div class="content-wrapper">
+    <p class="lead">
+        The design stage is centered on creating a clear blueprint for the product based on user requirements and business objectives. This involves defining user stories, which break down features into smaller, manageable tasks that can be prioritized and developed. Wireframes and prototypes are created to visualize the product's interface and functionality, allowing for feedback and refinement of requirements. Additionally, planning the architecture is crucial to establish the technical structure and components needed to support the product. The design process is iterative, with regular reviews and adjustments to ensure alignment with evolving user needs and business goals.
+    </p>
+    <!-- Buttons -->
+    <button id="generateDesignButton" class="btn btn-custom">Generate Design</button>
+    <a href="/prototyping?description={{ cleaned_description | urlencode }}" class="btn btn-custom">Next Stage: Prototyping</a>
+</div>
+<div class="content-wrapper">
+    <h2>{{ stage }} Process Description</h2>
+    <div class="content">
+        <pre id="design_content">{{ content }}</pre>
+    </div>
+</div>
+{% endblock %}

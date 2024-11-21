@@ -1,0 +1,316 @@
+                  Project_Name  Avg_Effort_Minutes  Avg_Resolution_Time  \
+0                 Apache Mesos        72047.436251         4.028684e+05   
+1                 Apache MXNet         8473.677350         6.062710e+04   
+2            Atlassian Bamboo        112681.002035         1.102510e+06   
+3   Atlassian Confluence Cloud         4021.402794         7.914446e+05   
+4  Atlassian Confluence Server        18130.839642         9.465866e+05   
+
+   Total_Issues Sprint_State  
+0         20314       ACTIVE  
+1          2808       ACTIVE  
+2         14252       ACTIVE  
+3         70227       ACTIVE  
+4         84648       ACTIVE  
+
+
+
+
+T-statistic for Avg Effort Minutes: 0.6582176571885743
+P-value for Avg Effort Minutes: 0.6294042404402986
+T-statistic for Avg Resolution Time: -1.8883821290304388
+P-value for Avg Resolution Time: 0.31004031908918617
+
+
+
+
+Correlation Matrix:
+                     Avg_Effort_Minutes  Avg_Resolution_Time  Total_Issues
+Avg_Effort_Minutes             1.000000             0.441597      0.015697
+Avg_Resolution_Time            0.441597             1.000000      0.160003
+Total_Issues                   0.015697             0.160003      1.000000
+
+
+ Priority                 Type  Avg_Resolution_Time
+0            Minor                Story          166851.0152
+1            Minor                  Bug          437546.7695
+2            Minor          Improvement          714200.9094
+3            Major                  Bug          426355.6808
+4         Critical                  Bug          223791.9696
+..             ...                  ...                  ...
+170        Blocker  Enhancement Request          108496.7908
+171                                Task           17675.9524
+172  Critical - P2             Question           19821.5063
+173   Trivial - P5             Question          333951.9063
+174   Blocker - P1             Question           51309.8750
+
+[175 rows x 3 columns]
+
+
+      Sprint_Name          Project_Name  Avg_Effort_Minutes  \
+0       Sprint 68             Spring XD         3542.285714   
+1       Sprint 67             Spring XD        16209.777778   
+2       Sprint 64             Spring XD        10425.000000   
+3       Sprint 63             Spring XD        19006.000000   
+4       Sprint 62             Spring XD        13875.000000   
+...           ...                   ...                 ...   
+3539     Sprint 7  Atlassian Jira Cloud            0.000000   
+3540     Sprint 8  Atlassian Jira Cloud            0.000000   
+3541    Dragonfly  Atlassian Jira Cloud            0.000000   
+3542  Dragonfly 4  Atlassian Jira Cloud            0.000000   
+3543  Dragonfly 2  Atlassian Jira Cloud            0.000000   
+
+      Total_Effort_Minutes  
+0                  24796.0  
+1                 145888.0  
+2                  10425.0  
+3                  95030.0  
+4                 166500.0  
+...                    ...  
+3539                   0.0  
+3540                   0.0  
+3541                   0.0  
+3542                   0.0  
+3543                   0.0  
+
+
+
+       Project_Name  Priority_Type_Changes
+0                             Spring XD                    155
+1                       Spring DataCass                     43
+2                        Sonatype Nexus                    817
+3                          Apache Mesos                    902
+4                       Apache Usergrid                    343
+5                          Apache MXNet                     36
+6                       Alloy Framework                    933
+7                         Aptana Studio                   4699
+8                Command-Line Interface                    358
+9                   Appcelerator Daemon                    201
+10             Titanium Mobile Platform                   2013
+11                     Atlassian Clover                    124
+12                      Atlassian Crowd                    465
+13                    Atlassian FishEye                    967
+14             Atlassian Software Cloud                   4391
+15  Atlassian Atlassian Software Server                   5753
+16                Atlassian Jira Server                  18196
+17                    Atlassian Bamboo                    2047
+18           Atlassian Confluence Cloud                   2744
+19          Atlassian Confluence Server                  14116
+20                 Hyperledger Sawtooth                     99
+21                 Hyperledger Indy SDK                     78
+22      Hyperledger Blockchain Explorer                     47
+23                Hyperledger Indy Node                    212
+24                   Hyperledger Fabric                   1278
+25             Lsstcorp Data management                    633
+26                   Lyrasis Dura Cloud                    203
+27                     MongoDB Compass                     152
+28                 The Mongo C++ driver                    205
+29                The Mongo Java driver                    278
+30              The MongoDB Engineering                    220
+31                               Moodle                  12270
+32                          Mule APIkit                    235
+33                                 Mule                   8852
+34                  Appcelerator Studio                   4649
+35                    The Titanium SDK                   17145
+36                 Atlassian Jira Cloud                   1864
+37                  DotNetNuke Platform                    731
+38                  MongoDB Core Server                   2675
+
+
+ Developer_ID  Avg_Effort_Minutes
+0                68            0.000000
+1                69            0.000000
+2                70            0.000000
+3                72         4602.044684
+4                73            0.000000
+...             ...                 ...
+74512        209121            0.000000
+74513        209122            0.000000
+74514        208978            0.000000
+74515        209123            0.000000
+74516        209125            0.000000
+
+
+
+          Project_Name  Backlog_Size
+0                             Spring XD          3707
+1                       Spring DataCass           756
+2                        Sonatype Nexus          9912
+3                          Apache Mesos          3068
+4                       Apache Usergrid          1307
+5                          Apache MXNet          1404
+6                       Alloy Framework          1020
+7                         Aptana Studio          7341
+8                Command-Line Interface           526
+9                   Appcelerator Daemon            44
+10             Titanium Mobile Platform          2974
+11                     Atlassian Clover          1501
+12                      Atlassian Crowd          4311
+13                    Atlassian FishEye          5533
+14                Atlassian Jira Server         44165
+15             Atlassian Software Cloud         11702
+16  Atlassian Atlassian Software Server         12862
+17                    Atlassian Bamboo          14252
+18           Atlassian Confluence Cloud         23409
+19          Atlassian Confluence Server         42324
+20                Hyperledger Indy Node          2321
+21                 Hyperledger Sawtooth          1663
+22                 Hyperledger Indy SDK          1531
+23      Hyperledger Blockchain Explorer           802
+24                   Hyperledger Fabric         13682
+25             Lsstcorp Data management         26506
+26                   Lyrasis Dura Cloud          1125
+27                     MongoDB Compass           1789
+28                 The Mongo C++ driver          2032
+29                The Mongo Java driver          3560
+30              The MongoDB Engineering          8721
+31                               Moodle         66741
+32                          Mule APIkit           860
+33                                 Mule         11177
+34                  Appcelerator Studio          5890
+35                    The Titanium SDK          21807
+36                 Atlassian Jira Cloud         25669
+37                  DotNetNuke Platform         10027
+38                  MongoDB Core Server         48663
+
+
+
+
+
+
+  Project_Name  Avg_Cycle_Time_Days
+0                             Spring XD              57.6901
+1                       Spring DataCass             127.3866
+2                        Sonatype Nexus             227.5084
+3                          Apache Mesos             279.2932
+4                       Apache Usergrid              90.9729
+5                          Apache MXNet              41.6495
+6                       Alloy Framework             101.4119
+7                         Aptana Studio             670.5836
+8                Command-Line Interface             198.2939
+9                   Appcelerator Daemon              99.7739
+10             Titanium Mobile Platform             151.7332
+11                     Atlassian Clover             842.9867
+12                      Atlassian Crowd             397.6433
+13                    Atlassian FishEye             484.3746
+14                Atlassian Jira Server             664.3821
+15             Atlassian Software Cloud             246.1592
+16  Atlassian Atlassian Software Server             275.5937
+17                    Atlassian Bamboo              765.1600
+18           Atlassian Confluence Cloud             549.1538
+19          Atlassian Confluence Server             656.8712
+20                Hyperledger Indy Node             427.7765
+21                 Hyperledger Sawtooth              55.7260
+22                 Hyperledger Indy SDK             106.4138
+23      Hyperledger Blockchain Explorer              65.2409
+24                   Hyperledger Fabric             113.0532
+25             Lsstcorp Data management             138.9308
+26                   Lyrasis Dura Cloud             307.0690
+27                     MongoDB Compass              162.4262
+28                 The Mongo C++ driver             106.3876
+29                The Mongo Java driver             141.0961
+30              The MongoDB Engineering              90.8408
+31                               Moodle             384.2630
+32                          Mule APIkit             121.9482
+33                                 Mule             318.5879
+34                  Appcelerator Studio             119.9292
+35                    The Titanium SDK              327.8777
+36                 Atlassian Jira Cloud             764.2922
+37                  DotNetNuke Platform             184.8866
+38                  MongoDB Core Server             163.1224
+
+
+
+ Project_Name  Estimation_Accuracy
+0                             Spring XD         7.725454e+04
+1                       Spring DataCass         3.667924e+05
+2                        Sonatype Nexus         2.650945e+05
+3                          Apache Mesos         4.449509e+05
+4                       Apache Usergrid         9.594305e+04
+5                          Apache MXNet         4.391908e+04
+6                       Alloy Framework         2.093108e+05
+7                         Aptana Studio         1.264250e+05
+8                Command-Line Interface         1.871847e+05
+9                   Appcelerator Daemon         1.234151e+05
+10             Titanium Mobile Platform         1.590929e+05
+11                     Atlassian Clover         1.123161e+06
+12                      Atlassian Crowd         3.740748e+05
+13                    Atlassian FishEye         4.223995e+05
+14             Atlassian Software Cloud         2.186492e+05
+15  Atlassian Atlassian Software Server         2.392892e+05
+16                Atlassian Jira Server         4.851879e+05
+17                    Atlassian Bamboo          2.402645e+05
+18           Atlassian Confluence Cloud         1.192823e+06
+19          Atlassian Confluence Server         5.651300e+05
+20                Hyperledger Indy Node         3.256651e+05
+21                 Hyperledger Sawtooth         3.532481e+04
+22                 Hyperledger Indy SDK         8.732920e+04
+23      Hyperledger Blockchain Explorer         7.586002e+04
+24                   Hyperledger Fabric         1.007615e+05
+25             Lsstcorp Data management         1.121332e+05
+26                   Lyrasis Dura Cloud         1.986982e+05
+27                     MongoDB Compass          1.391281e+05
+28                 The Mongo C++ driver         1.112148e+05
+29                The Mongo Java driver         1.139694e+06
+30              The MongoDB Engineering         5.673200e+04
+31                               Moodle         2.629150e+05
+32                          Mule APIkit         6.655813e+04
+33                                 Mule         1.849400e+05
+34                  Appcelerator Studio         1.498782e+05
+35                    The Titanium SDK          3.532297e+05
+36                 Atlassian Jira Cloud         5.421165e+05
+37                  DotNetNuke Platform         1.202323e+05
+38                  MongoDB Core Server         1.085148e+05
+
+
+
+        Project_Name  Defect_Density
+0                             Spring XD        0.000172
+1                       Spring DataCass        0.000107
+2                        Sonatype Nexus        0.000124
+3                          Apache Mesos        0.000014
+4                       Apache Usergrid        0.000126
+5                          Apache MXNet        0.000118
+6                       Alloy Framework        0.000146
+7                         Aptana Studio        0.000152
+8                Command-Line Interface        0.000043
+9                   Appcelerator Daemon        0.000038
+10             Titanium Mobile Platform        0.000057
+11                     Atlassian Clover        0.000027
+12                      Atlassian Crowd        0.000106
+13                    Atlassian FishEye        0.000033
+14                Atlassian Jira Server        0.000021
+15             Atlassian Software Cloud        0.000159
+16  Atlassian Atlassian Software Server        0.000027
+17                    Atlassian Bamboo         0.000009
+18           Atlassian Confluence Cloud        0.000249
+19          Atlassian Confluence Server        0.000055
+20                Hyperledger Indy Node        0.000059
+21                 Hyperledger Sawtooth        0.000047
+22                 Hyperledger Indy SDK        0.000072
+23      Hyperledger Blockchain Explorer        0.000065
+24                   Hyperledger Fabric        0.000025
+25             Lsstcorp Data management        0.000031
+26                   Lyrasis Dura Cloud        0.000108
+27                     MongoDB Compass         0.000079
+28                 The Mongo C++ driver        0.000063
+29                The Mongo Java driver        0.000071
+30              The MongoDB Engineering        0.000167
+31                               Moodle        0.000049
+32                          Mule APIkit        0.000082
+33                                 Mule        0.000156
+34                  Appcelerator Studio        0.000301
+35                    The Titanium SDK         0.000065
+36                 Atlassian Jira Cloud        0.000188
+37                  DotNetNuke Platform        0.000100
+38                  MongoDB Core Server        0.000076
+
+
+
+Correlation between Story Point and Resolution Time: 0.004929540850200155
+
+
+
+
+
+
+

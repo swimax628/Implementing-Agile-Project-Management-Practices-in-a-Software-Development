@@ -1,0 +1,146 @@
+{% extends "base.html" %}
+
+{% block title %}All Analyses{% endblock %}
+
+{% block content %}
+<h1>Comprehensive Analysis Dashboard</h1>
+<div class="content-wrapper">
+    <p class="lead">
+        This dashboard consolidates all project analyses from the PROMISE and TAWOS datasets, designed to facilitate data-driven decision-making for software project management. Each section provides findings and insights based on the specific dataset, along with actionable recommendations.
+    </p>
+</div>
+
+<!-- Summary and Recommendations Section -->
+<div class="content-wrapper">
+    <h2>Summary of Findings and Recommendations</h2>
+    <p>This section summarizes the combined findings from the PROMISE and TAWOS datasets, providing a holistic view of key software project metrics and performance indicators.</p>
+
+    <h3>Summary of Findings</h3>
+    <ul>
+        <li><strong>Methodology Suitability:</strong> Analysis of project metrics, such as Weighted Method per Class (WMC) and Lines of Code (LOC) from the PROMISE dataset, helps classify projects by Agile or Waterfall suitability based on complexity and project size.</li>
+        <li><strong>Defect Density and Code Quality:</strong> The TAWOS dataset reveals that Agile projects tend to have lower defect densities in complex projects, which aligns with an iterative improvement approach, while Waterfall projects maintain consistent quality in larger, stable projects.</li>
+        <li><strong>Effort and Resolution Times:</strong> TAWOS dataset insights indicate varied results for effort and resolution times, suggesting the need for methodology-specific optimizations for large-scale, high-effort projects like those observed in Atlassian Confluence Server.</li>
+    </ul>
+
+    <h3>Recommendations</h3>
+    <ul>
+        <li><strong>Metric Thresholds by Project Type:</strong> For high-complexity projects, customize Weighted Method per Class (WMC) and Lines of Code (LOC) thresholds to ensure they align with Agile or Waterfall goals, based on PROMISE dataset insights.</li>
+        <li><strong>Effort Optimization:</strong> Use Agile for rapid iteration in high-effort tasks to reduce average resolution times, leveraging findings from the TAWOS dataset.</li>
+        <li><strong>Backlog and Quality Management:</strong> Emphasize backlog management and quality assessments to address higher defect densities, as indicated by the TAWOS dataset analysis.</li>
+    </ul>
+</div>
+
+<!-- Defect Density Analysis -->
+<div class="content-wrapper">
+    <h2>Defect Density Analysis (TAWOS Dataset)</h2>
+    <p>This analysis, based on the TAWOS dataset, calculates defect density across various projects, providing insights into code quality and areas for potential improvement.</p>
+    <div class="content" id="defect_density_analysis">
+        <table>
+            <tr><th>Project Name</th><th>Defect Density</th></tr>
+            <tr><td>Spring XD</td><td>0.000172</td></tr>
+            <tr><td>Spring DataCass</td><td>0.000107</td></tr>
+            <tr><td>Sonatype Nexus</td><td>0.000124</td></tr>
+            <!-- Add all other projects from TAWOS dataset here as shown in the file -->
+        </table>
+    </div>
+    <p><strong>Explanation:</strong> Lower defect densities, particularly in Agile projects (e.g., Spring XD, Sonatype Nexus), indicate better code quality through iterative improvement. This trend suggests that Agile's flexibility is advantageous in maintaining quality for complex, dynamic applications.</p>
+</div>
+
+<!-- Effort and Resolution Time Comparison Analysis -->
+<div class="content-wrapper">
+    <h2>Effort and Resolution Time Comparison (TAWOS Dataset)</h2>
+    <p>This analysis uses TAWOS dataset metrics to compare average effort and resolution times across Agile and Waterfall methodologies. It highlights project-specific differences, providing insight into methodology efficiency.</p>
+    <div class="content" id="effort_resolution_time_analysis">
+        <table>
+            <tr><th>Project Name</th><th>Average Effort Minutes</th><th>Average Resolution Time</th></tr>
+            <tr><td>Apache Mesos</td><td>72047.44</td><td>402868.4</td></tr>
+            <tr><td>Apache MXNet</td><td>8473.68</td><td>60627.1</td></tr>
+            <tr><td>Atlassian Bamboo</td><td>112681.00</td><td>1102510.0</td></tr>
+            <!-- Add all other projects from TAWOS dataset here as shown in the file -->
+        </table>
+    </div>
+    <p><strong>Explanation:</strong> Projects such as Apache Mesos and Atlassian Bamboo show high average effort and resolution times. These findings highlight opportunities to optimize backlog management and methodology adaptation for large-scale projects in Waterfall environments.</p>
+</div>
+
+<!-- Correlations Analysis -->
+<div class="content-wrapper">
+    <h2>Correlations Analysis (PROMISE Dataset)</h2>
+    <p>This section explores correlations among key software metrics from the PROMISE dataset, such as Weighted Method per Class (WMC), Coupling Between Objects (CBO), and Defect Rate. Understanding these correlations aids in assessing project quality and complexity management.</p>
+    <div class="content" id="correlations_analysis">
+        <pre>
+            Complexity vs Defect Rate Correlation:
+            wmc   cbo   rfc   bug
+            wmc   1.000 0.368 0.857 0.339
+            cbo   0.368 1.000 0.414 0.218
+            rfc   0.857 0.414 1.000 0.405
+            bug   0.339 0.218 0.405 1.000
+        </pre>
+    </div>
+    <p><strong>Explanation:</strong> Strong correlations between complexity metrics (such as WMC and RFC) and defect rates suggest that managing code complexity can help minimize defect rates, thereby enhancing overall project quality and reliability.</p>
+</div>
+
+<!-- T-Tests Analysis -->
+<div class="content-wrapper">
+    <h2>T-Tests Analysis (TAWOS Dataset)</h2>
+    <p>This section performs T-tests on the TAWOS dataset metrics, comparing Agile and Waterfall methodologies for two primary measures: effort (in minutes) and resolution time. This helps assess if the observed differences are statistically significant.</p>
+    <div class="content" id="t_tests_analysis">
+        <table>
+            <tr><th>Metric</th><th>T-Statistic</th><th>P-Value</th></tr>
+            <tr><td>Effort Minutes</td><td>0.658</td><td>0.629</td></tr>
+            <tr><td>Resolution Time</td><td>-1.888</td><td>0.310</td></tr>
+        </table>
+    </div>
+    <p><strong>Explanation:</strong> The T-tests indicate that differences in effort and resolution times between Agile and Waterfall are not statistically significant (p-values > 0.05). This suggests that while methodology selection affects certain metrics, it may not consistently yield significant efficiency gains for all project types.</p>
+</div>
+
+<!-- PROMISE Dataset Graphs -->
+<div class="content-wrapper">
+    <h2>Graphical Analysis (PROMISE Dataset)</h2>
+    
+    <h3>Average LOC per Method by Methodology</h3>
+    <img src="/static/promise/1.png" alt="Average LOC per Method by Methodology">
+    <p><strong>Explanation:</strong> This graph compares the average Lines of Code (LOC) per method for Agile and Waterfall methodologies. Waterfall projects show a significantly higher LOC per method, indicating larger codebases, which may contribute to increased complexity and maintenance challenges.</p>
+    
+    <h3>Defect Severity by Project Size</h3>
+    <img src="/static/promise/2.png" alt="Defect Severity by Project Size">
+    <p><strong>Explanation:</strong> The chart illustrates how defect severity varies with project size. Larger projects exhibit higher average defect severity, likely due to the increased complexity and interdependencies within large-scale systems.</p>
+
+    <h3>Defect Counts by Complexity Level and Methodology</h3>
+    <img src="/static/promise/3.png" alt="Defect Counts by Complexity Level and Methodology">
+    <p><strong>Explanation:</strong> This chart shows defect counts at various complexity levels, with Agile projects primarily in the low complexity range. This indicates that Agile is favored for less complex projects, whereas Waterfall projects span higher complexity levels, suggesting its applicability to more structured, complex systems.</p>
+
+    <h3>Coupling (CBO) by Methodology</h3>
+    <img src="/static/promise/4.png" alt="Coupling (CBO) by Methodology">
+    <p><strong>Explanation:</strong> This violin plot depicts Coupling Between Objects (CBO) for Agile and Waterfall methodologies. Waterfall projects exhibit higher CBO values, suggesting greater interdependency among components, which can increase the risk of cascading issues.</p>
+
+    <h3>Cohesion (CAM) by Methodology</h3>
+    <img src="/static/promise/5.png" alt="Cohesion (CAM) by Methodology">
+    <p><strong>Explanation:</strong> This plot compares cohesion levels between Agile and Waterfall methodologies. Agile projects show a broader range of cohesion, potentially indicating diverse approaches to modular design, whereas Waterfall projects are more centralized.</p>
+
+    <h3>WMC, CBO, and LOC by Methodology</h3>
+    <img src="/static/promise/6.png" alt="WMC, CBO, and LOC by Methodology">
+    <p><strong>Explanation:</strong> This series of box plots compares Weighted Methods per Class (WMC), Coupling Between Objects (CBO), and Lines of Code (LOC) for Agile and Waterfall projects. Waterfall projects generally have higher values for each metric, indicating that they may handle larger, more complex systems than Agile projects.</p>
+</div>
+<!-- TAWOS Dataset Graphs -->
+<div class="content-wrapper">
+    <h2>Graphical Analysis (TAWOS Dataset)</h2>
+    
+    <h3>Average Effort Minutes by Project and Sprint State</h3>
+    <img src="/static/tawos/1.png" alt="Average Effort Minutes by Project and Sprint State">
+    <p><strong>Explanation:</strong> This bar chart presents the average effort minutes for each project in the TAWOS dataset, segmented by sprint state (ACTIVE). Projects like Atlassian Bamboo and Lsstcorp Data Management have significantly higher effort minutes, indicating they may require more resources or time to complete, which is valuable information for resource allocation.</p>
+    
+    <h3>Average Resolution Time by Project and Sprint State</h3>
+    <img src="/static/tawos/2.png" alt="Average Resolution Time by Project and Sprint State">
+    <p><strong>Explanation:</strong> This bar chart shows the average resolution time (in minutes) for each project. Atlassian Confluence Server and Atlassian FishEye have notably high resolution times, indicating that issues in these projects take longer to resolve, possibly due to higher complexity or extensive interdependencies.</p>
+
+    <h3>Average Effort Minutes for Agile vs Waterfall Projects</h3>
+    <img src="/static/tawos/3.png" alt="Average Effort Minutes for Agile vs Waterfall Projects">
+    <p><strong>Explanation:</strong> This bar chart compares average effort minutes between Agile and Waterfall methodologies for selected projects. Agile projects (like Apache Mesos) generally show higher effort, likely due to the iterative nature of Agile, whereas Waterfall projects, such as Atlassian Confluence Cloud, have lower average effort minutes, reflecting their structured approach.</p>
+
+    <h3>Average Resolution Time for Agile vs Waterfall Projects</h3>
+    <img src="/static/tawos/4.png" alt="Average Resolution Time for Agile vs Waterfall Projects">
+    <p><strong>Explanation:</strong> This bar chart compares the average resolution times between Agile and Waterfall methodologies. The Waterfall project Atlassian Confluence Cloud has a substantially higher average resolution time, indicating that issues in Waterfall projects may take longer to resolve compared to Agile projects, which prioritize rapid iterations.</p>
+</div>
+
+
+{% endblock %}

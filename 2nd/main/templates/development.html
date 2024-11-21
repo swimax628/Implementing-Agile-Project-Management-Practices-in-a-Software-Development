@@ -1,0 +1,22 @@
+<!-- templates/development.html -->
+{% extends "base.html" %}
+
+{% block title %}Development Stage{% endblock %}
+
+{% block content %}
+<h1>Development Stage</h1>
+<div class="content-wrapper">
+    <p class="lead">
+        The development stage focuses on building the product according to the design specifications. This phase involves coding, configuring environments, and integrating various components. Developers work collaboratively to implement features, resolve technical challenges, and ensure that the codebase is maintainable and scalable.
+    </p>
+    <!-- Buttons -->
+    <button id="generateDevelopmentButton" class="btn btn-custom">Generate Development Plan</button>
+    <a href="/testing?description={{ cleaned_description | urlencode }}" class="btn btn-custom">Next Stage: Testing</a>
+</div>
+<div class="content-wrapper">
+    <h2>{{ stage }} Process Description</h2>
+    <div class="content">
+        <pre id="development_content">{{ content }}</pre>
+    </div>
+</div>
+{% endblock %}

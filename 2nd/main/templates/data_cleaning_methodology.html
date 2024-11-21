@@ -1,0 +1,34 @@
+<!-- templates/data_cleaning_methodology.html -->
+{% extends "base.html" %}
+
+{% block title %}Data Cleaning Methodology{% endblock %}
+
+{% block content %}
+<h1>Data Cleaning Methodology</h1>
+<div class="content-wrapper">
+    <p class="lead">
+        Understanding the data cleaning methodology is crucial for ensuring that the data used in analysis is accurate and reliable.
+    </p>
+    <h2>Overview</h2>
+    <p>
+        Data cleaning involves several steps to prepare the data for analysis. These steps include removing duplicates, handling missing values, correcting errors, and standardizing data formats.
+    </p>
+    <h2>Steps in Data Cleaning:</h2>
+    <ol>
+        <li><strong>Data Collection:</strong> Gathering data from various reliable sources.</li>
+        <li><strong>Data Integration:</strong> Combining data from different sources into a unified dataset.</li>
+        <li><strong>Data Cleaning:</strong>
+            <ul>
+                <li>Removing duplicates and irrelevant data.</li>
+                <li>Handling missing data through imputation or removal.</li>
+                <li>Correcting errors and inconsistencies.</li>
+            </ul>
+        </li>
+        <li><strong>Data Transformation:</strong> Normalizing or standardizing data to ensure consistency.</li>
+        <li><strong>Data Validation:</strong> Verifying the quality and integrity of the cleaned data.</li>
+    </ol>
+    <!-- Added a button to proceed to analysis if needed -->
+    <a href="/" class="btn btn-custom">Back to Home</a>
+    <a href="/analysis" class="btn btn-custom">View Analyses</a>
+</div>
+{% endblock %}

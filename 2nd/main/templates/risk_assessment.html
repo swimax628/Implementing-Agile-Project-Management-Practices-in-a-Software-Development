@@ -1,0 +1,20 @@
+<!-- templates/risk_assessment.html -->
+{% extends "base.html" %}
+
+{% block title %}Risk Assessment{% endblock %}
+
+{% block content %}
+<h1>Risk Assessment</h1>
+<div class="content-wrapper">
+    <p class="lead">
+        The following is the risk assessment based on your project description.
+    </p>
+    <div class="content">
+        <pre id="riskAssessmentContent">{{ assessment }}</pre>
+    </div>
+    <!-- Buttons to navigate to other risk-related pages -->
+    <a href="/identified_risks?description={{ cleaned_description | urlencode }}" class="btn btn-custom">Identified Risks</a>
+    <a href="/risk_mitigation?description={{ cleaned_description | urlencode }}" class="btn btn-custom">Risk Mitigation</a>
+</div>
+{% endblock %}
+

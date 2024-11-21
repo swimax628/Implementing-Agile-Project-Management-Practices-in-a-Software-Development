@@ -1,0 +1,23 @@
+<!-- templates/testing.html -->
+{% extends "base.html" %}
+
+{% block title %}Testing Stage{% endblock %}
+
+{% block content %}
+<h1>Testing Stage</h1>
+<div class="content-wrapper">
+    <p class="lead">
+        The testing stage is critical for ensuring that the product meets quality standards and functions as intended. This phase involves various types of testing, such as unit testing, integration testing, system testing, and user acceptance testing. The goal is to identify and fix defects, improve performance, and validate that the product satisfies the requirements.
+    </p>
+    <!-- Buttons -->
+    <button id="generateTestingButton" class="btn btn-custom">Generate Testing Plan</button>
+    <a href="/maintenance?description={{ cleaned_description | urlencode }}" class="btn btn-custom">Next Stage: Maintenance</a>
+</div>
+<div class="content-wrapper">
+    <h2>{{ stage }} Process Description</h2>
+    <div class="content">
+        <pre id="testing_content">{{ content }}</pre>
+    </div>
+</div>
+{% endblock %}
+

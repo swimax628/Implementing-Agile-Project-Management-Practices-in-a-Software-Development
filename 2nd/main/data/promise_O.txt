@@ -1,0 +1,127 @@
+<promise>
+
+Complexity vs Defect Rate Correlation:
+           wmc       cbo       rfc       bug
+wmc  1.000000  0.367752  0.856957  0.338898
+cbo  0.367752  1.000000  0.413632  0.217598
+rfc  0.856957  0.413632  1.000000  0.405409
+bug  0.338898  0.217598  0.405409  1.000000
+
+
+
+Defect Density by Methodology:
+ methodology
+Agile             inf
+Waterfall    0.004389
+Name: defect_density, dtype: float64
+
+
+Complexity and LOC by Methodology:
+                    wmc        cbo         loc
+methodology                                  
+Agile         5.870524   8.285875  123.454987
+Waterfall    29.959984  20.160455  918.211848
+
+
+Quality Metrics (CAM and CBO) by Methodology:
+                   cam        cbo
+methodology                     
+Agile        0.527457   8.285875
+Waterfall    0.254249  20.160455
+
+
+Defect Rate by Complexity Level and Methodology:
+ methodology  complexity_level
+Agile        Low                 0.457660
+             Medium              0.820727
+             High                     NaN
+             Very High                NaN
+Waterfall    Low                 1.000000
+             Medium              1.158981
+             High                1.479012
+             Very High           1.866450
+Name: bug, dtype: float64
+
+
+Cohesion vs Defect Rate Correlation:
+           cam       bug
+cam  1.000000 -0.198747
+bug -0.198747  1.000000
+
+
+Method Count vs Defect Rate Correlation:
+           wmc       bug
+wmc  1.000000  0.338898
+bug  0.338898  1.000000
+
+
+Average LOC per Class by Methodology:
+ methodology
+Agile        123.454987
+Waterfall    918.211848
+Name: loc, dtype: float64
+
+
+Complexity vs Defect Rate Correlation:
+           wmc       cbo       rfc       bug
+wmc  1.000000  0.367752  0.856957  0.338898
+cbo  0.367752  1.000000  0.413632  0.217598
+rfc  0.856957  0.413632  1.000000  0.405409
+bug  0.338898  0.217598  0.405409  1.000000
+
+
+Defect Density by Methodology:
+ methodology
+Agile             inf
+Waterfall    0.004389
+Name: defect_density, dtype: float64
+
+
+
+Complexity and LOC by Methodology:
+                    wmc        cbo         loc
+methodology                                  
+Agile         5.870524   8.285875  123.454987
+Waterfall    29.959984  20.160455  918.211848
+
+
+Quality Metrics (CAM and CBO) by Methodology:
+                   cam        cbo
+methodology                     
+Agile        0.527457   8.285875
+Waterfall    0.254249  20.160455
+
+
+
+Defect Rate by Complexity Level and Methodology:
+ methodology  complexity_level
+Agile        Low                 0.457660
+             Medium              0.820727
+             High                     NaN
+             Very High                NaN
+Waterfall    Low                 1.000000
+             Medium              1.158981
+             High                1.479012
+             Very High           1.866450
+Name: bug, dtype: float64
+
+
+
+Defect Severity by Project Size:
+ project_size
+Very Small    0.541078
+Small         1.456500
+Medium        3.117737
+Large         6.228571
+Very Large    7.333333
+Name: bug, dtype: float64
+
+
+
+Average LOC per Method by Methodology:
+ methodology
+Agile              inf
+Waterfall    53.336468
+Name: loc_per_method, dtype: float64
+
+

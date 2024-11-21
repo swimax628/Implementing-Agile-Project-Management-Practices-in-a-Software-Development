@@ -1,0 +1,25 @@
+<!-- templates/clean_description.html -->
+{% extends "base.html" %}
+
+{% block title %}Clean Project Description{% endblock %}
+
+{% block content %}
+<h1>Clean Project Description</h1>
+<div class="content-wrapper">
+    <p class="lead">
+        Enter your project description below. The system will clean and preprocess the description to prepare it for analysis.
+    </p>
+    <form id="cleanDescriptionForm">
+        <div class="form-group">
+            <label for="projectDescription">Project Description:</label>
+            <textarea class="form-control" id="projectDescription" name="description" rows="5" required></textarea>
+        </div>
+        <button type="button" class="btn btn-custom" id="cleanDescriptionButton">Clean Description</button>
+    </form>
+    <div id="cleanedDescriptionSection" style="display: none;">
+        <h2>Cleaned Description</h2>
+        <pre id="cleanedDescription"></pre>
+        <a id="proceedToAnalysisLink" href="#" class="btn btn-custom">Proceed to Analysis</a>
+    </div>
+</div>
+{% endblock %}

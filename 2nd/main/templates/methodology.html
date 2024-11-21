@@ -1,0 +1,20 @@
+<!-- templates/methodology.html -->
+{% extends "base.html" %}
+
+{% block title %}Methodology Recommendation{% endblock %}
+
+{% block content %}
+<h1>Methodology Recommendation</h1>
+<div class="content-wrapper">
+    <p class="lead">
+        Based on your project description, the following methodology is recommended.
+    </p>
+    <div class="content">
+        <pre id="methodologyRecommendationContent">{{ recommendation_details }}</pre>
+    </div>
+    <!-- Button to proceed -->
+    <a href="/design?description={{ cleaned_description | urlencode }}" class="btn btn-custom">Proceed to Design Stage</a>
+</div>
+{% endblock %}
+
+

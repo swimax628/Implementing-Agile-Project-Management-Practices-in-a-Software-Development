@@ -1,0 +1,22 @@
+<!-- templates/prototyping.html -->
+{% extends "base.html" %}
+
+{% block title %}Prototyping Stage{% endblock %}
+
+{% block content %}
+<h1>Prototyping Stage</h1>
+<div class="content-wrapper">
+    <p class="lead">
+        The prototyping stage involves creating a preliminary version of the product to explore ideas and gather feedback. Prototypes help in visualizing how the final product will look and function, allowing stakeholders to understand and evaluate the proposed features and designs. This stage is crucial for identifying potential issues and making adjustments before investing significant resources into development.
+    </p>
+    <!-- Buttons -->
+    <button id="generatePrototypingButton" class="btn btn-custom">Generate Prototyping Plan</button>
+    <a href="/customer_evaluation?description={{ cleaned_description | urlencode }}" class="btn btn-custom">Next Stage: Customer Evaluation</a>
+</div>
+<div class="content-wrapper">
+    <h2>{{ stage }} Process Description</h2>
+    <div class="content">
+        <pre id="prototyping_content">{{ content }}</pre>
+    </div>
+</div>
+{% endblock %}

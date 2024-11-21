@@ -1,0 +1,22 @@
+<!-- templates/customer_evaluation.html -->
+{% extends "base.html" %}
+
+{% block title %}Customer Evaluation Stage{% endblock %}
+
+{% block content %}
+<h1>Customer Evaluation Stage</h1>
+<div class="content-wrapper">
+    <p class="lead">
+        The customer evaluation stage involves presenting the product to stakeholders and end-users for feedback. This stage is crucial for understanding how well the product meets user needs and identifying areas for improvement. Feedback gathered is used to make necessary adjustments before the final release.
+    </p>
+    <!-- Buttons -->
+    <button id="generateCustomerEvaluationButton" class="btn btn-custom">Generate Customer Evaluation Plan</button>
+    <a href="/review_and_update?description={{ cleaned_description | urlencode }}" class="btn btn-custom">Next Stage: Review & Update</a>
+</div>
+<div class="content-wrapper">
+    <h2>{{ stage }} Process Description</h2>
+    <div class="content">
+        <pre id="customer_evaluation_content">{{ content }}</pre>
+    </div>
+</div>
+{% endblock %}

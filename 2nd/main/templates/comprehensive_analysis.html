@@ -1,0 +1,74 @@
+<!-- templates/comprehensive_analysis.html -->
+{% extends "base.html" %}
+
+{% block title %}Comprehensive Project Analysis{% endblock %}
+
+{% block content %}
+<h1>Comprehensive Project Analysis</h1>
+<p class="lead">
+    This page provides a detailed, professional software project management guide based on the project description and analysis results. 
+    It combines insights from the PROMISE and TAWOS datasets and provides recommendations for effective project management strategies.
+</p>
+
+<div class="analysis-content">
+    <!-- Project Overview -->
+    <section class="overview-section">
+        <h2>Project Overview</h2>
+        <div class="content-wrapper">
+            <p>{{ description }}</p>
+        </div>
+    </section>
+
+    <!-- Recommended Management Strategy -->
+    <section class="strategy-section">
+        <h2>Recommended Management Strategy</h2>
+        <div class="content-wrapper">
+            <p>{{ management_strategy }}</p>
+        </div>
+    </section>
+
+    <!-- Step-by-Step Recommendations -->
+    <section class="recommendations-section">
+        <h2>Step-by-Step Recommendations</h2>
+        <div class="content-wrapper">
+            <ul>
+                {% for step in recommendations %}
+                    <li>{{ step }}</li>
+                {% endfor %}
+            </ul>
+        </div>
+    </section>
+
+    <!-- Dataset Insights -->
+    <section class="dataset-insights-section">
+        <h2>Dataset Insights</h2>
+
+        <!-- PROMISE Dataset Insights -->
+        <div class="content-wrapper">
+            <h3>PROMISE Dataset Insights</h3>
+            <p>{{ promise_insights }}</p> <!-- Updated to match backend -->
+        </div>
+
+        <!-- TAWOS Dataset Insights -->
+        <div class="content-wrapper">
+            <h3>TAWOS Dataset Insights</h3>
+            <p>{{ tawos_insights }}</p> <!-- Updated to match backend -->
+        </div>
+
+        <!-- Summarized Dataset Insights -->
+        <div class="content-wrapper">
+            <h3>Summarized Dataset Insights</h3>
+            <p>{{ summarized_insights }}</p> <!-- Updated to match backend -->
+        </div>
+    </section>
+
+    <!-- Final Conclusion -->
+    <section class="conclusion-section">
+        <h2>Final Conclusion</h2>
+        <div class="content-wrapper">
+            <p>{{ final_conclusion }}</p> <!-- Added final conclusion -->
+        </div>
+    </section>
+
+</div>
+{% endblock %}

@@ -1,0 +1,19 @@
+<!-- templates/identified_risks.html -->
+{% extends "base.html" %}
+
+{% block title %}Identified Risks{% endblock %}
+
+{% block content %}
+<h1>Identified Risks</h1>
+<div class="content-wrapper">
+    <p class="lead">
+        Below are the identified risks based on your project description.
+    </p>
+    <div class="content">
+        <pre id="identifiedRisksContent">{{ assessment }}</pre>
+    </div>
+    <!-- Buttons to navigate to other risk-related pages -->
+    <a href="/risk_assessment?description={{ cleaned_description | urlencode }}" class="btn btn-custom">Risk Assessment</a>
+    <a href="/risk_mitigation?description={{ cleaned_description | urlencode }}" class="btn btn-custom">Risk Mitigation</a>
+</div>
+{% endblock %}

@@ -1,0 +1,24 @@
+<!-- templates/stage.html -->
+{% extends "base.html" %}
+
+{% block title %}{{ stage }} Stage{% endblock %}
+
+{% block content %}
+<h1>{{ stage }} Stage</h1>
+<div class="content-wrapper">
+    <p class="lead">
+        {{ lead_paragraph }}
+    </p>
+    <!-- Buttons -->
+    <button id="generateContentButton" class="btn btn-custom">Generate {{ stage }} Plan</button>
+    {% if next_stage_url %}
+        <a href="{{ next_stage_url }}?description={{ cleaned_description | urlencode }}" class="btn btn-custom">Next Stage: {{ next_stage_name }}</a>
+    {% endif %}
+</div>
+<div class="content-wrapper">
+    <h2>{{ stage }} Process Description</h2>
+    <div class="content">
+        <pre id="stage_content">{{ content }}</pre>
+    </div>
+</div>
+{% endblock %}

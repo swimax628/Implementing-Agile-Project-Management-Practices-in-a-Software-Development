@@ -1,0 +1,38 @@
+Project Management/
+├── config.py
+├── main.py
+├── models.py
+├── database.py
+├── utils.py
+├── routers/
+│   ├── risk_analysis.py
+│   ├── methodology_recommendation.py
+│   ├── estimation_benchmarking.py
+│   ├── other_routes.py
+├── static/
+│   ├── css
+	├──styles.css
+│   ├── js
+	├── index.js
+├── templates/
+│   ├── base.html
+│   ├── clean_description.html
+│   ├── customer_evaluation.html
+│   ├── data_cleaning_methodology.html
+│   ├── design.html
+│   ├── development.html
+│   ├── identified_risks.html
+│   ├── index.html
+│   ├── maintenance.html
+│   ├── methodology.html
+│   ├── navbar.html
+│   ├── prototyping.html
+│   ├── review_and_update.html
+│   ├── risk_assessment.html
+│   ├── risk_mitigation.html
+│   ├── stage.html
+│   ├── test_prototype.html
+│   ├── testing.html
+├── data/
+│   ├── promise_dataset.csv
+├── .env

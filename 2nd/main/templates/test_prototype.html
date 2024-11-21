@@ -1,0 +1,25 @@
+<!-- templates/test_prototype.html -->
+{% extends "base.html" %}
+
+{% block title %}Test Prototype{% endblock %}
+
+{% block content %}
+<h1>Test Prototype</h1>
+<div class="card">
+    <div class="card-header">Test Your Prototype</div>
+    <div class="card-body">
+        <form id="test-form">
+            <div class="form-group">
+                <label for="test_description">Test Description:</label>
+                <textarea class="form-control" id="test_description" name="test_description" rows="5" required></textarea>
+            </div>
+            <button type="button" class="btn btn-custom" id="testButton">Test Prototype</button>
+        </form>
+        <div id="testResultSection" style="display: none;">
+            <h2>Test Results:</h2>
+            <pre id="test_results"></pre>
+        </div>
+    </div>
+</div>
+{% endblock %}
+

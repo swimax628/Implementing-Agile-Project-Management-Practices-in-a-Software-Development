@@ -1,0 +1,21 @@
+<!-- templates/maintenance.html -->
+{% extends "base.html" %}
+
+{% block title %}Maintenance Stage{% endblock %}
+
+{% block content %}
+<h1>Maintenance Stage</h1>
+<div class="content-wrapper">
+    <p class="lead">
+        The maintenance stage ensures the product remains functional and relevant after deployment. This involves updating the software to fix bugs, improve performance, and add new features based on user feedback. Regular maintenance helps in prolonging the product's lifecycle and adapting to changing requirements or technologies.
+    </p>
+    <!-- Buttons -->
+    <button id="generateMaintenanceButton" class="btn btn-custom">Generate Maintenance Plan</button>
+</div>
+<div class="content-wrapper">
+    <h2>{{ stage }} Process Description</h2>
+    <div class="content">
+        <pre id="maintenance_content">{{ content }}</pre>
+    </div>
+</div>
+{% endblock %}

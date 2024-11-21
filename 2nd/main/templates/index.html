@@ -1,0 +1,80 @@
+<!-- templates/index.html -->
+{% extends "base.html" %}
+
+{% block title %}Project Analysis and Methodology Recommendation{% endblock %}
+
+{% block content %}
+<h1>Project Analysis and Insights</h1>
+<link href="/static/css/styles.css" rel="stylesheet">
+
+<!-- Include Chart.js library -->
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+
+<!-- Project Description Input -->
+<div class="card mb-4">
+    <div class="card-header">Project Description</div>
+    <div class="card-body">
+        <form id="description-form">
+            <div class="form-group">
+                <label for="description">Enter your project description (including estimated LOC, complexity level, and methodology if known):</label>
+                <textarea class="form-control" id="description" name="description" rows="5" required></textarea>
+                <small class="form-text text-muted">Please include as many details as possible for accurate analysis.</small>
+            </div>
+            <button type="button" class="btn btn-custom" id="submitDescriptionButton">Analyse Project</button>
+        </form>
+        <div id="cleaned-result" class="mt-3"></div>
+    </div>
+</div>
+
+<!-- Result Sections -->
+<div id="riskAssessmentSection" class="result-section" style="display: none;">
+    <h2>Risk Assessment Report</h2>
+    <p id="riskAssessmentContent"></p>
+</div>
+
+<div id="methodologySection" class="result-section" style="display: none;">
+    <h2>Methodology Recommendation</h2>
+    <p id="methodologyContent"></p>
+</div>
+
+<div id="estimationSection" class="result-section" style="display: none;">
+    <h2>Estimation Accuracy and Complexity Assessment</h2>
+    <p id="estimationContent"></p>
+</div>
+
+<!-- Buttons -->
+<button id="generateChartsButton" class="btn btn-custom" style="display: none;">Generate Productivity Charts</button>
+<button id="viewAnalysesButton" class="btn btn-custom" style="display: none;">View Analyses</button>
+<button id="comprehensiveAnalysisButton" class="btn btn-custom" style="display: none;">Comprehensive Analysis</button>
+
+
+<!-- Loading Spinner -->
+<div id="loadingSpinner" style="display: none;">
+    <img src="/static/images/spinner.gif" alt="Loading..." class="spinner">
+</div>
+
+<!-- Charts Container -->
+<div class="chart-container" id="chartsSection" style="display: none;">
+    <div class="chart-wrapper">
+        <h2>Agile Productivity</h2>
+        <canvas id="agileChart"></canvas>
+        <small class="form-text text-muted">This chart represents the Agile productivity metrics over time points.</small>
+    </div>
+    <div class="chart-wrapper">
+        <h2>Waterfall Productivity</h2>
+        <canvas id="waterfallChart"></canvas>
+        <small class="form-text text-muted">This chart represents the Waterfall productivity metrics over time points.</small>
+    </div>
+</div>
+
+<script>
+    document.getElementById('generateChartsButton').addEventListener('click', () => {
+        // Show loading spinner during the chart generation process
+        document.getElementById('loadingSpinner').style.display = 'block';
+        generateChartsHandler().finally(() => {
+            document.getElementById('loadingSpinner').style.display = 'none';
+        });
+    });
+</script>
+
+{% endblock %}
